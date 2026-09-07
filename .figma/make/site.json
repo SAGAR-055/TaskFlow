@@ -1,0 +1,10 @@
+{
+  "description": "Organize and track daily, weekly, and yearly tasks with deadlines and hours needed, featuring a responsive calendar view and task completion tracking.",
+  "robots": {
+    "index": false
+  },
+  "accessibility": {
+    "addBypassLinks": false,
+    "ignoreReducedMotion": false
+  }
+}

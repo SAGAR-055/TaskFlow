@@ -1,0 +1,156 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&display=swap');
+@import 'tailwindcss';
+
+@theme inline {
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Inter", sans-serif;
+  --font-mono: "SF Mono", "SFMono-Regular", ui-monospace, monospace;
+}
+
+html, body, #root {
+  height: 100%;
+  min-height: 100%;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(0,0,0,0.1) transparent;
+  box-sizing: border-box;
+}
+*::-webkit-scrollbar { width: 4px; height: 4px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.12); border-radius: 99px; }
+
+/* iOS 26 Liquid Glass base */
+.glass {
+  background: rgba(255, 255, 255, 0.62);
+  backdrop-filter: saturate(1.8) blur(28px);
+  -webkit-backdrop-filter: saturate(1.8) blur(28px);
+  border: 1px solid rgba(255,255,255,0.85);
+  box-shadow:
+    0 2px 24px rgba(100,100,180,0.07),
+    0 1px 2px rgba(255,255,255,0.9) inset,
+    0 -1px 1px rgba(0,0,0,0.04) inset;
+}
+
+.glass-dark {
+  background: rgba(255,255,255,0.18);
+  backdrop-filter: saturate(2) blur(32px);
+  -webkit-backdrop-filter: saturate(2) blur(32px);
+  border: 1px solid rgba(255,255,255,0.55);
+  box-shadow:
+    0 4px 32px rgba(80,80,160,0.10),
+    0 1px 2px rgba(255,255,255,0.7) inset;
+}
+
+.glass-card {
+  background: rgba(255,255,255,0.70);
+  backdrop-filter: saturate(1.6) blur(20px);
+  -webkit-backdrop-filter: saturate(1.6) blur(20px);
+  border: 1px solid rgba(255,255,255,0.90);
+  box-shadow:
+    0 1px 12px rgba(100,100,180,0.06),
+    0 1px 0 rgba(255,255,255,1) inset;
+  transition: transform 0.25s cubic-bezier(.34,1.56,.64,1), box-shadow 0.25s ease;
+}
+
+.glass-card:hover {
+  transform: translateY(-2px) scale(1.008);
+  box-shadow:
+    0 6px 28px rgba(80,80,160,0.12),
+    0 1px 0 rgba(255,255,255,1) inset;
+}
+
+.glass-btn {
+  background: rgba(255,255,255,0.55);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255,255,255,0.8);
+  box-shadow: 0 1px 6px rgba(0,0,0,0.07), 0 1px 0 rgba(255,255,255,0.9) inset;
+  transition: all 0.2s cubic-bezier(.34,1.56,.64,1);
+}
+
+.glass-btn:hover {
+  background: rgba(255,255,255,0.75);
+  transform: scale(1.04);
+  box-shadow: 0 3px 14px rgba(0,0,0,0.10), 0 1px 0 rgba(255,255,255,1) inset;
+}
+
+.glass-btn:active {
+  transform: scale(0.96);
+}
+
+/* Bubble / pill tab */
+.tab-pill {
+  transition: all 0.3s cubic-bezier(.34,1.56,.64,1);
+}
+
+/* Smooth check animation */
+.check-anim {
+  transition: all 0.3s cubic-bezier(.34,1.56,.64,1);
+}
+
+/* 3D card tilt */
+.tilt-card {
+  transform-style: preserve-3d;
+  transition: transform 0.4s cubic-bezier(.25,.8,.25,1), box-shadow 0.4s ease;
+}
+
+/* Strike-through for done tasks */
+.task-done {
+  text-decoration: line-through;
+  text-decoration-color: rgba(0,0,0,0.25);
+  opacity: 0.45;
+  transition: opacity 0.4s ease;
+}
+
+/* Animated gradient background */
+.bg-iridescent {
+  background:
+    radial-gradient(ellipse 900px 600px at 20% 10%, rgba(200,210,255,0.55) 0%, transparent 70%),
+    radial-gradient(ellipse 700px 500px at 80% 80%, rgba(255,200,230,0.45) 0%, transparent 65%),
+    radial-gradient(ellipse 600px 400px at 60% 30%, rgba(180,255,230,0.35) 0%, transparent 60%),
+    linear-gradient(135deg, #f0f4ff 0%, #fdf0ff 40%, #f0fff8 100%);
+  background-attachment: fixed;
+}
+
+/* Modal backdrop */
+.modal-backdrop {
+  background: rgba(200,210,240,0.35);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+}
+
+/* Floating animation */
+@keyframes float {
+  0%, 100% { transform: translateY(0px) rotate(0deg); }
+  33% { transform: translateY(-8px) rotate(1deg); }
+  66% { transform: translateY(-4px) rotate(-0.5deg); }
+}
+
+/* Shimmer on load */
+@keyframes shimmer {
+  from { opacity: 0; transform: translateY(12px) scale(0.97); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.animate-in {
+  animation: shimmer 0.4s cubic-bezier(.34,1.56,.64,1) both;
+}
+
+input, select, textarea {
+  outline: none;
+  -webkit-appearance: none;
+  font-family: inherit;
+}
+
+input[type="date"]::-webkit-calendar-picker-indicator {
+  opacity: 0.4;
+  cursor: pointer;
+}
+
+/* Smooth progress bar */
+.progress-bar {
+  transition: width 0.7s cubic-bezier(.4,0,.2,1);
+}
