@@ -15,6 +15,15 @@ interface Task {
   createdAt: string;
 }
 
+interface Habit {
+  id: string;
+  name: string;
+  emoji: string;
+  color: string;
+  completedDates: string[];
+  createdAt: string;
+}
+
 const TYPE_META: Record<TaskType, { label: string; color: string; bg: string; emoji: string }> = {
   daily:   { label: "Daily",   color: "#007AFF", bg: "rgba(0,122,255,0.12)",   emoji: "☀️" },
   weekly:  { label: "Weekly",  color: "#34C759", bg: "rgba(52,199,89,0.12)",   emoji: "📅" },
@@ -50,6 +59,7 @@ const INITIAL_TASKS: Task[] = [
 ];
 
 const TASKS_STORAGE_KEY = "taskflow.tasks";
+const HABITS_STORAGE_KEY = "taskflow.habits";
 
 function isTaskType(value: unknown): value is TaskType {
   return value === "daily" || value === "weekly" || value === "monthly" || value === "yearly";
@@ -91,7 +101,94 @@ function loadTasks(): Task[] {
   }
 }
 
-type View = "tasks" | "calendar";
+function isHabit(value: unknown): value is Habit {
+  if (typeof value !== "object" || value === null) return false;
+  const habit = value as Record<string, unknown>;
+  return typeof habit.id === "string"
+    && typeof habit.name === "string"
+    && typeof habit.emoji === "string"
+    && typeof habit.color === "string"
+    && Array.isArray(habit.completedDates)
+    && habit.completedDates.every(date => typeof date === "string")
+    && typeof habit.createdAt === "string";
+}
+
+function loadHabits(): Habit[] {
+  try {
+    const stored = localStorage.getItem(HABITS_STORAGE_KEY);
+    if (!stored) return [];
+    const parsed: unknown = JSON.parse(stored);
+    if (!Array.isArray(parsed) || !parsed.every(isHabit)) {
+      console.error("TaskFlow could not restore habits because stored data is invalid.");
+      return [];
+    }
+    return parsed;
+  } catch (error) {
+    console.error("TaskFlow could not restore habits from local storage.", error);
+    return [];
+  }
+}
+
+function dateOffset(offset: number) {
+  const date = new Date();
+  date.setDate(date.getDate() + offset);
+  return date.toISOString().slice(0, 10);
+}
+
+/* ── Add Habit Modal ── */
+function AddHabitModal({ onClose, onAdd }: { onClose: () => void; onAdd: (habit: Habit) => void }) {
+  const [form, setForm] = useState({ name: "", emoji: "🌱", color: "#34C759" });
+
+  function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!form.name.trim()) return;
+    onAdd({ id: uid(), ...form, name: form.name.trim(), completedDates: [], createdAt: new Date().toISOString() });
+    onClose();
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 modal-backdrop" onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="glass w-full sm:max-w-md rounded-t-3xl sm:rounded-3xl p-6 animate-in">
+        <div className="w-10 h-1 rounded-full mx-auto mb-5 sm:hidden" style={{ background: "rgba(0,0,0,0.15)" }} />
+        <div className="flex items-center justify-between mb-5">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: "#34C759" }}>Habit tracker</p>
+            <h2 className="text-xl font-semibold" style={{ color: "#1c1c1e", letterSpacing: "-0.4px" }}>New Habit</h2>
+          </div>
+          <button onClick={onClose} className="glass-btn w-8 h-8 rounded-full flex items-center justify-center text-sm" style={{ color: "#636366" }}>✕</button>
+        </div>
+        <form onSubmit={submit} className="space-y-4">
+          <div>
+            <label className="text-xs font-medium mb-1.5 block" style={{ color: "#636366" }}>Habit name</label>
+            <input type="text" required autoFocus value={form.name} onChange={e => setForm(p => ({ ...p, name: e.target.value }))} placeholder="e.g. Read for 20 minutes"
+              className="w-full px-4 py-3 rounded-2xl text-sm border" style={{ background: "rgba(255,255,255,0.6)", borderColor: "rgba(255,255,255,0.9)", color: "#1c1c1e" }} />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs font-medium mb-1.5 block" style={{ color: "#636366" }}>Icon</label>
+              <input type="text" maxLength={2} value={form.emoji} onChange={e => setForm(p => ({ ...p, emoji: e.target.value || "🌱" }))}
+                className="w-full px-4 py-3 rounded-2xl text-xl text-center border" style={{ background: "rgba(255,255,255,0.6)", borderColor: "rgba(255,255,255,0.9)" }} />
+            </div>
+            <div>
+              <label className="text-xs font-medium mb-1.5 block" style={{ color: "#636366" }}>Color</label>
+              <input type="color" value={form.color} onChange={e => setForm(p => ({ ...p, color: e.target.value }))}
+                className="w-full h-12 p-1 rounded-2xl border" style={{ background: "rgba(255,255,255,0.6)", borderColor: "rgba(255,255,255,0.9)" }} />
+            </div>
+          </div>
+          <div className="flex gap-3 pt-1">
+            <button type="button" onClick={onClose} className="glass-btn flex-1 py-3 rounded-2xl text-sm font-medium" style={{ color: "#636366" }}>Cancel</button>
+            <button type="submit" className="flex-1 py-3 rounded-2xl text-sm font-semibold transition-all hover:opacity-90 active:scale-95"
+              style={{ background: "linear-gradient(135deg, #34C759 0%, #00A86B 100%)", color: "#fff", boxShadow: "0 4px 16px rgba(52,199,89,0.35)" }}>
+              Add Habit
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+type View = "tasks" | "habits" | "calendar";
 type Tab = TaskType | "all";
 
 /* ── Tilt card wrapper ── */
@@ -435,6 +532,76 @@ function TaskCard({ task, onToggle, onDelete, onEdit }: {
   );
 }
 
+/* ── Habit Tracker ── */
+function HabitStats({ habits }: { habits: Habit[] }) {
+  const today = dateOffset(0);
+  const completedToday = habits.filter(habit => habit.completedDates.includes(today)).length;
+  const totalCheckIns = habits.reduce((total, habit) => total + habit.completedDates.length, 0);
+  const bestStreak = habits.reduce((best, habit) => Math.max(best, getHabitStreak(habit)), 0);
+  const stats = [
+    { label: "Habits", value: habits.length, icon: "🌱", color: "#34C759" },
+    { label: "Today", value: `${completedToday}/${habits.length}`, icon: "✅", color: "#007AFF" },
+    { label: "Check-ins", value: totalCheckIns, icon: "🔥", color: "#FF9500" },
+    { label: "Best streak", value: `${bestStreak}d`, icon: "🏆", color: "#AF52DE" },
+  ];
+
+  return (
+    <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+      {stats.map((stat, index) => (
+        <TiltCard key={stat.label} className="glass-card rounded-3xl p-4" style={{ animationDelay: `${index * 60}ms` }}>
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-xl">{stat.icon}</span>
+            <span className="text-xs font-medium rounded-full px-2 py-0.5" style={{ background: `${stat.color}18`, color: stat.color }}>{stat.label}</span>
+          </div>
+          <div className="text-3xl font-bold" style={{ color: "#1c1c1e", letterSpacing: "-1px", fontVariantNumeric: "tabular-nums" }}>{stat.value}</div>
+        </TiltCard>
+      ))}
+    </div>
+  );
+}
+
+function getHabitStreak(habit: Habit) {
+  const dates = new Set(habit.completedDates);
+  let streak = 0;
+  for (let offset = 0; dates.has(dateOffset(-offset)); offset += 1) streak += 1;
+  return streak;
+}
+
+function HabitCard({ habit, onToggle, onDelete }: { habit: Habit; onToggle: (id: string) => void; onDelete: (id: string) => void }) {
+  const today = dateOffset(0);
+  const completedToday = habit.completedDates.includes(today);
+  const streak = getHabitStreak(habit);
+  const recentDays = Array.from({ length: 7 }, (_, index) => dateOffset(index - 6));
+
+  return (
+    <TiltCard className="glass-card rounded-3xl p-4 animate-in" style={{ borderColor: completedToday ? `${habit.color}55` : "rgba(255,255,255,0.9)" }}>
+      <div className="flex items-start gap-3">
+        <button onClick={() => onToggle(habit.id)} aria-label={`${completedToday ? "Undo" : "Complete"} ${habit.name}`}
+          className="habit-check w-12 h-12 rounded-2xl flex-shrink-0 flex items-center justify-center text-2xl check-anim"
+          style={{ background: completedToday ? habit.color : `${habit.color}18`, boxShadow: completedToday ? `0 5px 16px ${habit.color}55` : "none" }}>
+          {completedToday ? "✓" : habit.emoji}
+        </button>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center justify-between gap-2">
+            <div>
+              <h3 className={`text-sm font-semibold ${completedToday ? "habit-complete" : ""}`} style={{ color: "#1c1c1e" }}>{habit.name}</h3>
+              <p className="text-xs mt-1" style={{ color: "#8E8E93" }}>{streak > 0 ? `🔥 ${streak} day streak` : "Start your streak today"}</p>
+            </div>
+            <button onClick={() => onDelete(habit.id)} className="glass-btn w-7 h-7 rounded-full flex items-center justify-center text-xs" style={{ color: "#FF3B30" }} aria-label={`Delete ${habit.name}`}>✕</button>
+          </div>
+          <div className="flex items-center gap-1.5 mt-3">
+            {recentDays.map(day => {
+              const done = habit.completedDates.includes(day);
+              return <span key={day} title={day} className="habit-day" style={{ background: done ? habit.color : "rgba(0,0,0,0.07)", opacity: done ? 1 : 0.65 }} />;
+            })}
+            <span className="text-xs ml-1" style={{ color: "#8E8E93" }}>last 7 days</span>
+          </div>
+        </div>
+      </div>
+    </TiltCard>
+  );
+}
+
 /* ── Calendar View ── */
 function CalendarView({ tasks }: { tasks: Task[] }) {
   const today = new Date();
@@ -554,12 +721,14 @@ function CalendarView({ tasks }: { tasks: Task[] }) {
 /* ── Main App ── */
 export default function App() {
   const [tasks, setTasks] = useState<Task[]>(loadTasks);
+  const [habits, setHabits] = useState<Habit[]>(loadHabits);
   const [view, setView] = useState<View>("tasks");
   const [tab, setTab] = useState<Tab>("all");
   const [showModal, setShowModal] = useState(false);
   const [editingTask, setEditingTask] = useState<Task | null>(null);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | "pending" | "completed">("all");
+  const [showHabitModal, setShowHabitModal] = useState(false);
 
   useEffect(() => {
     try {
@@ -569,10 +738,30 @@ export default function App() {
     }
   }, [tasks]);
 
+  useEffect(() => {
+    try {
+      localStorage.setItem(HABITS_STORAGE_KEY, JSON.stringify(habits));
+    } catch (error) {
+      console.error("TaskFlow could not save habits to local storage.", error);
+    }
+  }, [habits]);
+
   function toggleTask(id: string) { setTasks(p => p.map(t => t.id === id ? { ...t, completed: !t.completed } : t)); }
   function deleteTask(id: string) { setTasks(p => p.filter(t => t.id !== id)); }
   function addTask(task: Task) { setTasks(p => [task, ...p]); }
   function saveTask(updated: Task) { setTasks(p => p.map(t => t.id === updated.id ? updated : t)); }
+  function addHabit(habit: Habit) { setHabits(p => [habit, ...p]); }
+  function deleteHabit(id: string) { setHabits(p => p.filter(habit => habit.id !== id)); }
+  function toggleHabit(id: string) {
+    const today = dateOffset(0);
+    setHabits(previous => previous.map(habit => {
+      if (habit.id !== id) return habit;
+      const completedDates = habit.completedDates.includes(today)
+        ? habit.completedDates.filter(date => date !== today)
+        : [...habit.completedDates, today];
+      return { ...habit, completedDates };
+    }));
+  }
 
   const filtered = useMemo(() => tasks.filter(t => {
     if (tab !== "all" && t.type !== tab) return false;
@@ -595,6 +784,7 @@ export default function App() {
   return (
     <div className="min-h-full bg-iridescent">
       {showModal && <AddTaskModal onClose={() => setShowModal(false)} onAdd={addTask} />}
+      {showHabitModal && <AddHabitModal onClose={() => setShowHabitModal(false)} onAdd={addHabit} />}
       {editingTask && <EditTaskModal task={editingTask} onClose={() => setEditingTask(null)} onSave={saveTask} />}
 
       {/* Header */}
@@ -615,7 +805,7 @@ export default function App() {
           <div className="flex items-center gap-2">
             {/* View toggle */}
             <div className="hidden sm:flex glass-dark rounded-2xl p-1 gap-1">
-              {(["tasks", "calendar"] as View[]).map(v => (
+              {(["tasks", "habits", "calendar"] as View[]).map(v => (
                 <button key={v} onClick={() => setView(v)}
                   className="px-3 py-1.5 rounded-xl text-xs font-medium transition-all tab-pill"
                   style={{
@@ -624,32 +814,32 @@ export default function App() {
                     boxShadow: view === v ? "0 1px 6px rgba(0,0,0,0.08)" : "none",
                     fontWeight: view === v ? 600 : 400,
                   }}>
-                  {v === "tasks" ? "📋 Tasks" : "📅 Calendar"}
+                  {v === "tasks" ? "📋 Tasks" : v === "habits" ? "🌱 Habits" : "📅 Calendar"}
                 </button>
               ))}
             </div>
-            <button onClick={() => setShowModal(true)}
+            <button onClick={() => view === "habits" ? setShowHabitModal(true) : setShowModal(true)}
               className="flex items-center gap-1.5 px-4 py-2 rounded-2xl text-sm font-semibold transition-all active:scale-95"
               style={{ background: "linear-gradient(135deg, #007AFF 0%, #5B5BFF 100%)", color: "#fff", boxShadow: "0 4px 16px rgba(0,122,255,0.35)" }}>
               <span className="text-base leading-none font-light">+</span>
-              <span className="hidden sm:inline">New Task</span>
+              <span className="hidden sm:inline">{view === "habits" ? "New Habit" : "New Task"}</span>
             </button>
           </div>
         </div>
         {/* Mobile view toggle */}
         <div className="sm:hidden flex border-t border-white/40 px-4 py-2 gap-2">
-          {(["tasks", "calendar"] as View[]).map(v => (
+          {(["tasks", "habits", "calendar"] as View[]).map(v => (
             <button key={v} onClick={() => setView(v)}
               className="flex-1 py-2 rounded-xl text-xs font-medium transition-all"
               style={{ background: view === v ? "rgba(255,255,255,0.7)" : "transparent", color: view === v ? "#007AFF" : "#8E8E93" }}>
-              {v === "tasks" ? "📋 Tasks" : "📅 Calendar"}
+              {v === "tasks" ? "📋 Tasks" : v === "habits" ? "🌱 Habits" : "📅 Calendar"}
             </button>
           ))}
         </div>
       </header>
 
       <main className="max-w-5xl mx-auto px-4 sm:px-6 py-6 space-y-5">
-        <StatsBar tasks={view === "tasks" ? filtered : tasks} />
+        {view === "habits" ? <HabitStats habits={habits} /> : <StatsBar tasks={view === "tasks" ? filtered : tasks} />}
 
         {view === "tasks" ? (
           <>
@@ -717,6 +907,27 @@ export default function App() {
                   + Add a task
                 </button>
               </div>
+            ) : view === "habits" ? (
+              <section className="space-y-4">
+                <div className="glass-card rounded-3xl px-5 py-4 flex items-center justify-between gap-3">
+                  <div>
+                    <h2 className="font-semibold" style={{ color: "#1c1c1e" }}>Build better routines</h2>
+                    <p className="text-xs mt-1" style={{ color: "#8E8E93" }}>Small steps, tracked consistently.</p>
+                  </div>
+                  <span className="text-3xl" style={{ animation: "float 4s ease-in-out infinite" }}>🌿</span>
+                </div>
+                {habits.length === 0 ? (
+                  <div className="glass-card rounded-3xl py-16 flex flex-col items-center gap-3">
+                    <span className="text-4xl">🌱</span>
+                    <p className="text-sm font-medium" style={{ color: "#8E8E93" }}>No habits yet</p>
+                    <button onClick={() => setShowHabitModal(true)} className="glass-btn px-4 py-2 rounded-2xl text-xs font-semibold" style={{ color: "#34C759" }}>+ Add a habit</button>
+                  </div>
+                ) : (
+                  <div className="space-y-2.5">
+                    {habits.map(habit => <HabitCard key={habit.id} habit={habit} onToggle={toggleHabit} onDelete={deleteHabit} />)}
+                  </div>
+                )}
+              </section>
             ) : (
               <div className="space-y-2.5 group">
                 {filtered.map((task, i) => (
