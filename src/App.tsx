@@ -899,15 +899,7 @@ export default function App() {
             )}
 
             {/* Task list */}
-            {filtered.length === 0 ? (
-              <div className="glass-card rounded-3xl py-16 flex flex-col items-center gap-3">
-                <span className="text-4xl">🌸</span>
-                <p className="text-sm font-medium" style={{ color: "#8E8E93" }}>No tasks found</p>
-                <button onClick={() => setShowModal(true)} className="glass-btn px-4 py-2 rounded-2xl text-xs font-semibold" style={{ color: "#007AFF" }}>
-                  + Add a task
-                </button>
-              </div>
-            ) : view === "habits" ? (
+            {view === "habits" ? (
               <section className="space-y-4">
                 <div className="glass-card rounded-3xl px-5 py-4 flex items-center justify-between gap-3">
                   <div>
@@ -928,6 +920,14 @@ export default function App() {
                   </div>
                 )}
               </section>
+            ) : filtered.length === 0 ? (
+              <div className="glass-card rounded-3xl py-16 flex flex-col items-center gap-3">
+                <span className="text-4xl">🌸</span>
+                <p className="text-sm font-medium" style={{ color: "#8E8E93" }}>No tasks found</p>
+                <button onClick={() => setShowModal(true)} className="glass-btn px-4 py-2 rounded-2xl text-xs font-semibold" style={{ color: "#007AFF" }}>
+                  + Add a task
+                </button>
+              </div>
             ) : (
               <div className="space-y-2.5 group">
                 {filtered.map((task, i) => (
