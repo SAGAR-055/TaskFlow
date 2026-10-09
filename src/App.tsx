@@ -60,6 +60,7 @@ const INITIAL_TASKS: Task[] = [
 
 const TASKS_STORAGE_KEY = "taskflow.tasks";
 const HABITS_STORAGE_KEY = "taskflow.habits";
+const HABIT_EMOJIS = ["🌱", "📚", "💧", "🏃", "🧘", "🍎", "💤", "📝", "💻", "🎨", "🎸", "☀️", "🙏", "🚶", "🧹", "🧠"];
 
 function isTaskType(value: unknown): value is TaskType {
   return value === "daily" || value === "weekly" || value === "monthly" || value === "yearly";
@@ -135,14 +136,18 @@ function dateOffset(offset: number) {
   return date.toISOString().slice(0, 10);
 }
 
-/* ── Add Habit Modal ── */
-function AddHabitModal({ onClose, onAdd }: { onClose: () => void; onAdd: (habit: Habit) => void }) {
-  const [form, setForm] = useState({ name: "", emoji: "🌱", color: "#34C759" });
+/* ── Habit Modal ── */
+function HabitModal({ habit, onClose, onSave }: { habit?: Habit; onClose: () => void; onSave: (habit: Habit) => void }) {
+  const [form, setForm] = useState(() => habit
+    ? { name: habit.name, emoji: habit.emoji, color: habit.color }
+    : { name: "", emoji: "🌱", color: "#34C759" });
 
   function submit(e: React.FormEvent) {
     e.preventDefault();
     if (!form.name.trim()) return;
-    onAdd({ id: uid(), ...form, name: form.name.trim(), completedDates: [], createdAt: new Date().toISOString() });
+    onSave(habit
+      ? { ...habit, ...form, emoji: form.emoji.trim() || "🌱", name: form.name.trim() }
+      : { id: uid(), ...form, emoji: form.emoji.trim() || "🌱", name: form.name.trim(), completedDates: [], createdAt: new Date().toISOString() });
     onClose();
   }
 
@@ -153,7 +158,7 @@ function AddHabitModal({ onClose, onAdd }: { onClose: () => void; onAdd: (habit:
         <div className="flex items-center justify-between mb-5">
           <div>
             <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: "#34C759" }}>Habit tracker</p>
-            <h2 className="text-xl font-semibold" style={{ color: "#1c1c1e", letterSpacing: "-0.4px" }}>New Habit</h2>
+            <h2 className="text-xl font-semibold" style={{ color: "#1c1c1e", letterSpacing: "-0.4px" }}>{habit ? "Edit Habit" : "New Habit"}</h2>
           </div>
           <button onClick={onClose} className="glass-btn w-8 h-8 rounded-full flex items-center justify-center text-sm" style={{ color: "#636366" }}>✕</button>
         </div>
@@ -166,7 +171,7 @@ function AddHabitModal({ onClose, onAdd }: { onClose: () => void; onAdd: (habit:
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="text-xs font-medium mb-1.5 block" style={{ color: "#636366" }}>Icon</label>
-              <input type="text" maxLength={2} value={form.emoji} onChange={e => setForm(p => ({ ...p, emoji: e.target.value || "🌱" }))}
+              <input type="text" value={form.emoji} onChange={e => setForm(p => ({ ...p, emoji: e.target.value }))} aria-label="Habit icon" placeholder="Choose an emoji"
                 className="w-full px-4 py-3 rounded-2xl text-xl text-center border" style={{ background: "rgba(255,255,255,0.6)", borderColor: "rgba(255,255,255,0.9)" }} />
             </div>
             <div>
@@ -175,11 +180,19 @@ function AddHabitModal({ onClose, onAdd }: { onClose: () => void; onAdd: (habit:
                 className="w-full h-12 p-1 rounded-2xl border" style={{ background: "rgba(255,255,255,0.6)", borderColor: "rgba(255,255,255,0.9)" }} />
             </div>
           </div>
+          <div className="grid grid-cols-8 gap-2" aria-label="Choose a habit icon">
+            {HABIT_EMOJIS.map(emoji => (
+              <button key={emoji} type="button" onClick={() => setForm(p => ({ ...p, emoji }))} aria-label={`Use ${emoji} as habit icon`} aria-pressed={form.emoji === emoji}
+                className="glass-btn h-10 rounded-xl text-xl" style={{ outline: form.emoji === emoji ? "2px solid #34C759" : "none", outlineOffset: 1 }}>
+                {emoji}
+              </button>
+            ))}
+          </div>
           <div className="flex gap-3 pt-1">
             <button type="button" onClick={onClose} className="glass-btn flex-1 py-3 rounded-2xl text-sm font-medium" style={{ color: "#636366" }}>Cancel</button>
             <button type="submit" className="flex-1 py-3 rounded-2xl text-sm font-semibold transition-all hover:opacity-90 active:scale-95"
               style={{ background: "linear-gradient(135deg, #34C759 0%, #00A86B 100%)", color: "#fff", boxShadow: "0 4px 16px rgba(52,199,89,0.35)" }}>
-              Add Habit
+              {habit ? "Save Changes" : "Add Habit"}
             </button>
           </div>
         </form>
@@ -567,7 +580,7 @@ function getHabitStreak(habit: Habit) {
   return streak;
 }
 
-function HabitCard({ habit, onToggle, onDelete }: { habit: Habit; onToggle: (id: string) => void; onDelete: (id: string) => void }) {
+function HabitCard({ habit, onToggle, onDelete, onEdit }: { habit: Habit; onToggle: (id: string) => void; onDelete: (id: string) => void; onEdit: (habit: Habit) => void }) {
   const today = dateOffset(0);
   const completedToday = habit.completedDates.includes(today);
   const streak = getHabitStreak(habit);
@@ -587,7 +600,10 @@ function HabitCard({ habit, onToggle, onDelete }: { habit: Habit; onToggle: (id:
               <h3 className={`text-sm font-semibold ${completedToday ? "habit-complete" : ""}`} style={{ color: "#1c1c1e" }}>{habit.name}</h3>
               <p className="text-xs mt-1" style={{ color: "#8E8E93" }}>{streak > 0 ? `🔥 ${streak} day streak` : "Start your streak today"}</p>
             </div>
-            <button onClick={() => onDelete(habit.id)} className="glass-btn w-7 h-7 rounded-full flex items-center justify-center text-xs" style={{ color: "#FF3B30" }} aria-label={`Delete ${habit.name}`}>✕</button>
+            <div className="flex items-center gap-1.5">
+              <button onClick={() => onEdit(habit)} className="glass-btn w-7 h-7 rounded-full flex items-center justify-center text-xs" style={{ color: "#007AFF" }} aria-label={`Edit ${habit.name}`}>✎</button>
+              <button onClick={() => onDelete(habit.id)} className="glass-btn w-7 h-7 rounded-full flex items-center justify-center text-xs" style={{ color: "#FF3B30" }} aria-label={`Delete ${habit.name}`}>✕</button>
+            </div>
           </div>
           <div className="flex items-center gap-1.5 mt-3">
             {recentDays.map(day => {
@@ -729,6 +745,7 @@ export default function App() {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | "pending" | "completed">("all");
   const [showHabitModal, setShowHabitModal] = useState(false);
+  const [editingHabit, setEditingHabit] = useState<Habit | null>(null);
 
   useEffect(() => {
     try {
@@ -751,6 +768,7 @@ export default function App() {
   function addTask(task: Task) { setTasks(p => [task, ...p]); }
   function saveTask(updated: Task) { setTasks(p => p.map(t => t.id === updated.id ? updated : t)); }
   function addHabit(habit: Habit) { setHabits(p => [habit, ...p]); }
+  function saveHabit(updated: Habit) { setHabits(p => p.map(habit => habit.id === updated.id ? updated : habit)); }
   function deleteHabit(id: string) { setHabits(p => p.filter(habit => habit.id !== id)); }
   function toggleHabit(id: string) {
     const today = dateOffset(0);
@@ -784,7 +802,8 @@ export default function App() {
   return (
     <div className="min-h-full bg-iridescent">
       {showModal && <AddTaskModal onClose={() => setShowModal(false)} onAdd={addTask} />}
-      {showHabitModal && <AddHabitModal onClose={() => setShowHabitModal(false)} onAdd={addHabit} />}
+      {showHabitModal && <HabitModal onClose={() => setShowHabitModal(false)} onSave={addHabit} />}
+      {editingHabit && <HabitModal key={editingHabit.id} habit={editingHabit} onClose={() => setEditingHabit(null)} onSave={saveHabit} />}
       {editingTask && <EditTaskModal task={editingTask} onClose={() => setEditingTask(null)} onSave={saveTask} />}
 
       {/* Header */}
@@ -841,7 +860,28 @@ export default function App() {
       <main className="max-w-5xl mx-auto px-4 sm:px-6 py-6 space-y-5">
         {view === "habits" ? <HabitStats habits={habits} /> : <StatsBar tasks={view === "tasks" ? filtered : tasks} />}
 
-        {view === "tasks" ? (
+        {view === "habits" ? (
+          <section className="space-y-4">
+            <div className="glass-card rounded-3xl px-5 py-4 flex items-center justify-between gap-3">
+              <div>
+                <h2 className="font-semibold" style={{ color: "#1c1c1e" }}>Your habits</h2>
+                <p className="text-xs mt-1" style={{ color: "#8E8E93" }}>Build better routines, one day at a time.</p>
+              </div>
+              <button onClick={() => setShowHabitModal(true)} className="glass-btn px-4 py-2 rounded-2xl text-xs font-semibold whitespace-nowrap" style={{ color: "#34C759" }}>+ Add a habit</button>
+            </div>
+            {habits.length === 0 ? (
+              <div className="glass-card rounded-3xl py-16 flex flex-col items-center gap-3">
+                <span className="text-4xl">🌱</span>
+                <p className="text-sm font-medium" style={{ color: "#8E8E93" }}>No habits yet</p>
+                <button onClick={() => setShowHabitModal(true)} className="glass-btn px-4 py-2 rounded-2xl text-xs font-semibold" style={{ color: "#34C759" }}>Create your first habit</button>
+              </div>
+            ) : (
+              <div className="space-y-2.5">
+                {habits.map(habit => <HabitCard key={habit.id} habit={habit} onToggle={toggleHabit} onDelete={deleteHabit} onEdit={setEditingHabit} />)}
+              </div>
+            )}
+          </section>
+        ) : view === "tasks" ? (
           <>
             {/* Tabs */}
             <div className="glass rounded-3xl p-1.5 flex justify-center gap-1 overflow-x-auto">
@@ -899,28 +939,7 @@ export default function App() {
             )}
 
             {/* Task list */}
-            {view === "habits" ? (
-              <section className="space-y-4">
-                <div className="glass-card rounded-3xl px-5 py-4 flex items-center justify-between gap-3">
-                  <div>
-                    <h2 className="font-semibold" style={{ color: "#1c1c1e" }}>Build better routines</h2>
-                    <p className="text-xs mt-1" style={{ color: "#8E8E93" }}>Small steps, tracked consistently.</p>
-                  </div>
-                  <span className="text-3xl" style={{ animation: "float 4s ease-in-out infinite" }}>🌿</span>
-                </div>
-                {habits.length === 0 ? (
-                  <div className="glass-card rounded-3xl py-16 flex flex-col items-center gap-3">
-                    <span className="text-4xl">🌱</span>
-                    <p className="text-sm font-medium" style={{ color: "#8E8E93" }}>No habits yet</p>
-                    <button onClick={() => setShowHabitModal(true)} className="glass-btn px-4 py-2 rounded-2xl text-xs font-semibold" style={{ color: "#34C759" }}>+ Add a habit</button>
-                  </div>
-                ) : (
-                  <div className="space-y-2.5">
-                    {habits.map(habit => <HabitCard key={habit.id} habit={habit} onToggle={toggleHabit} onDelete={deleteHabit} />)}
-                  </div>
-                )}
-              </section>
-            ) : filtered.length === 0 ? (
+            {filtered.length === 0 ? (
               <div className="glass-card rounded-3xl py-16 flex flex-col items-center gap-3">
                 <span className="text-4xl">🌸</span>
                 <p className="text-sm font-medium" style={{ color: "#8E8E93" }}>No tasks found</p>
