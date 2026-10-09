@@ -810,10 +810,8 @@ export default function App() {
       <header className="sticky top-0 z-40 glass border-b border-white/60">
         <div className="max-w-5xl mx-auto px-4 sm:px-6 py-3 flex items-center justify-between gap-3">
           <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-2xl flex items-center justify-center text-lg font-bold shadow-lg"
-              style={{ background: "linear-gradient(135deg, #007AFF 0%, #5B5BFF 100%)", boxShadow: "0 4px 14px rgba(0,122,255,0.4)" }}>
-              ✦
-            </div>
+            <img src={`${import.meta.env.BASE_URL}Icon.png`} alt="" className="w-9 h-9 rounded-2xl object-cover shadow-lg"
+              style={{ boxShadow: "0 4px 14px rgba(0,122,255,0.4)" }} />
             <div>
               <h1 className="text-base font-bold leading-tight" style={{ color: "#1c1c1e", letterSpacing: "-0.5px" }}>TaskFlow</h1>
               <p className="text-xs leading-none" style={{ color: "#8E8E93" }}>
