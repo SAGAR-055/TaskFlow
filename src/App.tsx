@@ -795,7 +795,8 @@ export default function App() {
       <header className="sticky top-0 z-40 glass border-b border-white/60">
         <div className="max-w-5xl mx-auto px-4 sm:px-6 py-3 flex items-center justify-between gap-3">
           <div className="flex items-center gap-3">
-            <img src={`${import.meta.env.BASE_URL}Icon.png`} alt="" className="w-9 h-9 rounded-2xl object-cover shadow-lg"
+            <img src={`${import.meta.env.BASE_URL}Icon.png`} alt="TaskFlow" width={36} height={36}
+              className="w-9 h-9 rounded-2xl bg-white/80 p-0.5 object-contain shadow-lg ring-1 ring-blue-100"
               style={{ boxShadow: "0 4px 14px rgba(0,122,255,0.4)" }} />
             <div>
               <h1 className="text-base font-bold leading-tight" style={{ color: "#1c1c1e", letterSpacing: "-0.5px" }}>TaskFlow</h1>
