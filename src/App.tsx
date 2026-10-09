@@ -42,21 +42,6 @@ function uid() { return Math.random().toString(36).slice(2, 9); }
 function daysFromNow(n: number) {
   const d = new Date(); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10);
 }
-function monthsFromNow(n: number) {
-  const d = new Date(); d.setMonth(d.getMonth() + n); return d.toISOString().slice(0, 10);
-}
-
-const INITIAL_TASKS: Task[] = [
-  { id: uid(), title: "Morning workout", description: "30 min cardio + stretching", type: "daily", deadline: daysFromNow(0), hours: 0.5, priority: "medium", completed: true, createdAt: new Date().toISOString() },
-  { id: uid(), title: "Review pull requests", description: "Check open PRs and leave feedback", type: "daily", deadline: daysFromNow(0), hours: 1.5, priority: "high", completed: false, createdAt: new Date().toISOString() },
-  { id: uid(), title: "Team standup", description: "Daily sync with engineering team", type: "daily", deadline: daysFromNow(0), hours: 0.5, priority: "medium", completed: false, createdAt: new Date().toISOString() },
-  { id: uid(), title: "Write unit tests", description: "Add coverage for the auth module", type: "weekly", deadline: daysFromNow(4), hours: 6, priority: "high", completed: false, createdAt: new Date().toISOString() },
-  { id: uid(), title: "Design system audit", description: "Review components for accessibility", type: "weekly", deadline: daysFromNow(6), hours: 4, priority: "medium", completed: false, createdAt: new Date().toISOString() },
-  { id: uid(), title: "Q3 performance reviews", description: "Complete reviews for direct reports", type: "monthly", deadline: monthsFromNow(1), hours: 12, priority: "high", completed: false, createdAt: new Date().toISOString() },
-  { id: uid(), title: "Blog post on system design", description: "Write and publish technical article", type: "monthly", deadline: monthsFromNow(1), hours: 8, priority: "low", completed: false, createdAt: new Date().toISOString() },
-  { id: uid(), title: "Ship v2.0 release", description: "Complete all milestones for the next major version", type: "yearly", deadline: monthsFromNow(3), hours: 320, priority: "high", completed: false, createdAt: new Date().toISOString() },
-  { id: uid(), title: "AWS Solutions Architect cert", description: "Study and pass the SAA-C03 exam", type: "yearly", deadline: monthsFromNow(6), hours: 120, priority: "medium", completed: false, createdAt: new Date().toISOString() },
-];
 
 const TASKS_STORAGE_KEY = "taskflow.tasks";
 const HABITS_STORAGE_KEY = "taskflow.habits";
@@ -87,18 +72,18 @@ function isTask(value: unknown): value is Task {
 function loadTasks(): Task[] {
   try {
     const stored = localStorage.getItem(TASKS_STORAGE_KEY);
-    if (!stored) return INITIAL_TASKS;
+    if (!stored) return [];
 
     const parsed: unknown = JSON.parse(stored);
     if (!Array.isArray(parsed) || !parsed.every(isTask)) {
       console.error("TaskFlow could not restore tasks because stored data is invalid.");
-      return INITIAL_TASKS;
+      return [];
     }
 
     return parsed;
   } catch (error) {
     console.error("TaskFlow could not restore tasks from local storage.", error);
-    return INITIAL_TASKS;
+    return [];
   }
 }
 
@@ -819,21 +804,33 @@ export default function App() {
               </p>
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-1 min-w-0 items-center gap-2 ml-3">
             {/* View toggle */}
-            <div className="hidden sm:flex glass-dark rounded-2xl p-1 gap-1">
-              {(["tasks", "habits", "calendar"] as View[]).map(v => (
-                <button key={v} onClick={() => setView(v)}
-                  className="px-3 py-1.5 rounded-xl text-xs font-medium transition-all tab-pill"
-                  style={{
-                    background: view === v ? "rgba(255,255,255,0.85)" : "transparent",
-                    color: view === v ? "#007AFF" : "#8E8E93",
-                    boxShadow: view === v ? "0 1px 6px rgba(0,0,0,0.08)" : "none",
-                    fontWeight: view === v ? 600 : 400,
-                  }}>
-                  {v === "tasks" ? "📋 Tasks" : v === "habits" ? "🌱 Habits" : "📅 Calendar"}
-                </button>
-              ))}
+            <div className="hidden sm:grid flex-1 min-w-0 grid-cols-[1fr_auto_1fr] items-center">
+              <div />
+              <div className="glass-dark flex items-center justify-center gap-1 rounded-2xl p-1">
+                {(["tasks", "habits"] as View[]).map(v => (
+                  <button key={v} onClick={() => setView(v)}
+                    className="px-3 py-1.5 rounded-xl text-xs font-medium transition-all tab-pill"
+                    style={{
+                      background: view === v ? "rgba(255,255,255,0.85)" : "transparent",
+                      color: view === v ? "#007AFF" : "#8E8E93",
+                      boxShadow: view === v ? "0 1px 6px rgba(0,0,0,0.08)" : "none",
+                      fontWeight: view === v ? 600 : 400,
+                    }}>
+                    {v === "tasks" ? "📋 Tasks" : "🌱 Habits"}
+                  </button>
+                ))}
+              </div>
+              <button onClick={() => setView("calendar")} aria-label="Calendar" title="Calendar"
+                className="glass-dark justify-self-end rounded-xl px-3 py-2 text-sm transition-all tab-pill"
+                style={{
+                  background: view === "calendar" ? "rgba(255,255,255,0.85)" : undefined,
+                  color: view === "calendar" ? "#007AFF" : "#8E8E93",
+                  boxShadow: view === "calendar" ? "0 1px 6px rgba(0,0,0,0.08)" : undefined,
+                }}>
+                📅
+              </button>
             </div>
             <button onClick={() => view === "habits" ? setShowHabitModal(true) : setShowModal(true)}
               className="flex items-center gap-1.5 px-4 py-2 rounded-2xl text-sm font-semibold transition-all active:scale-95"
@@ -844,14 +841,22 @@ export default function App() {
           </div>
         </div>
         {/* Mobile view toggle */}
-        <div className="sm:hidden flex border-t border-white/40 px-4 py-2 gap-2">
-          {(["tasks", "habits", "calendar"] as View[]).map(v => (
-            <button key={v} onClick={() => setView(v)}
-              className="flex-1 py-2 rounded-xl text-xs font-medium transition-all"
-              style={{ background: view === v ? "rgba(255,255,255,0.7)" : "transparent", color: view === v ? "#007AFF" : "#8E8E93" }}>
-              {v === "tasks" ? "📋 Tasks" : v === "habits" ? "🌱 Habits" : "📅 Calendar"}
-            </button>
-          ))}
+        <div className="sm:hidden grid grid-cols-[1fr_auto_1fr] items-center border-t border-white/40 px-4 py-2">
+          <div />
+          <div className="glass-dark flex items-center justify-center gap-1 rounded-2xl p-1">
+            {(["tasks", "habits"] as View[]).map(v => (
+              <button key={v} onClick={() => setView(v)}
+                className="px-3 py-2 rounded-xl text-xs font-medium transition-all"
+                style={{ background: view === v ? "rgba(255,255,255,0.7)" : "transparent", color: view === v ? "#007AFF" : "#8E8E93" }}>
+                {v === "tasks" ? "📋 Tasks" : "🌱 Habits"}
+              </button>
+            ))}
+          </div>
+          <button onClick={() => setView("calendar")} aria-label="Calendar" title="Calendar"
+            className="glass-dark justify-self-end rounded-xl px-3 py-2 text-sm transition-all"
+            style={{ background: view === "calendar" ? "rgba(255,255,255,0.7)" : undefined, color: view === "calendar" ? "#007AFF" : "#8E8E93" }}>
+            📅
+          </button>
         </div>
       </header>
 
