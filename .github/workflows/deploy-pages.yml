@@ -20,6 +20,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          lfs: true
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -34,6 +36,19 @@ jobs:
         run: npm run build
         env:
           VITE_BASE_PATH: /${{ github.event.repository.name }}/
+
+      - name: Validate PWA icons
+        run: |
+          node -e '
+            const fs = require("node:fs");
+            for (const [file, size] of [["dist/Icon-192.png", 192], ["dist/Icon-512.png", 512]]) {
+              const icon = fs.readFileSync(file);
+              const isPng = icon.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+              if (!isPng || icon.readUInt32BE(16) !== size || icon.readUInt32BE(20) !== size) {
+                throw new Error(`${file} is missing or is not a valid ${size}x${size} PNG`);
+              }
+            }
+          '
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
