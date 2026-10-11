@@ -47,6 +47,11 @@ const TASKS_STORAGE_KEY = "taskflow.tasks";
 const HABITS_STORAGE_KEY = "taskflow.habits";
 const HABIT_EMOJIS = ["🌱", "📚", "💧", "🏃", "🧘", "🍎", "💤", "📝", "💻", "🎨", "🎸", "☀️", "🙏", "🚶", "🧹", "🧠"];
 
+interface InstallPromptEvent extends Event {
+  prompt: () => Promise<void>;
+  userChoice: Promise<{ outcome: "accepted" | "dismissed"; platform: string }>;
+}
+
 function isTaskType(value: unknown): value is TaskType {
   return value === "daily" || value === "weekly" || value === "monthly" || value === "yearly";
 }
@@ -723,6 +728,8 @@ function CalendarView({ tasks }: { tasks: Task[] }) {
 export default function App() {
   const [tasks, setTasks] = useState<Task[]>(loadTasks);
   const [habits, setHabits] = useState<Habit[]>(loadHabits);
+  const [installPrompt, setInstallPrompt] = useState<InstallPromptEvent | null>(null);
+  const [isInstalled, setIsInstalled] = useState(false);
   const [view, setView] = useState<View>("tasks");
   const [tab, setTab] = useState<Tab>("all");
   const [showModal, setShowModal] = useState(false);
@@ -731,6 +738,38 @@ export default function App() {
   const [statusFilter, setStatusFilter] = useState<"all" | "pending" | "completed">("all");
   const [showHabitModal, setShowHabitModal] = useState(false);
   const [editingHabit, setEditingHabit] = useState<Habit | null>(null);
+
+  useEffect(() => {
+    setIsInstalled(window.matchMedia("(display-mode: standalone)").matches);
+
+    const handleBeforeInstallPrompt = (event: Event) => {
+      event.preventDefault();
+      setInstallPrompt(event as InstallPromptEvent);
+    };
+    const handleAppInstalled = () => {
+      setIsInstalled(true);
+      setInstallPrompt(null);
+    };
+
+    window.addEventListener("beforeinstallprompt", handleBeforeInstallPrompt);
+    window.addEventListener("appinstalled", handleAppInstalled);
+    return () => {
+      window.removeEventListener("beforeinstallprompt", handleBeforeInstallPrompt);
+      window.removeEventListener("appinstalled", handleAppInstalled);
+    };
+  }, []);
+
+  async function installApp() {
+    if (!installPrompt) return;
+    try {
+      await installPrompt.prompt();
+      await installPrompt.userChoice;
+      setInstallPrompt(null);
+    } catch (error) {
+      console.error("TaskFlow could not open the native installation prompt.", error);
+      setInstallPrompt(null);
+    }
+  }
 
   useEffect(() => {
     try {
@@ -806,6 +845,13 @@ export default function App() {
             </div>
           </div>
           <div className="flex flex-1 min-w-0 items-center gap-2 ml-3">
+            {installPrompt && !isInstalled && (
+              <button onClick={installApp}
+                className="glass-btn rounded-2xl px-3 py-2 text-sm font-semibold whitespace-nowrap"
+                style={{ color: "#007AFF" }}>
+                Install
+              </button>
+            )}
             {/* View toggle */}
             <div className="hidden sm:grid flex-1 min-w-0 grid-cols-[1fr_auto_1fr] items-center">
               <div />
