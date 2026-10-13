@@ -445,6 +445,37 @@ function StatsBar({ tasks }: { tasks: Task[] }) {
   );
 }
 
+function CalendarStatsBar({ tasks, habits, selectedDay }: { tasks: Task[]; habits: Habit[]; selectedDay: string }) {
+  const total = tasks.length + habits.length;
+  const completedTasks = tasks.filter(task => task.completed).length;
+  const completedHabits = habits.filter(habit => habit.completedDates.includes(selectedDay)).length;
+  const done = completedTasks + completedHabits;
+  const hoursLeft = tasks.filter(task => !task.completed).reduce((sum, task) => sum + task.hours, 0);
+  const today = new Date().toISOString().slice(0, 10);
+  const overdue = tasks.filter(task => !task.completed && task.deadline < today).length;
+  const stats = [
+    { label: "Tasks + habits", value: total, detail: `${tasks.length} tasks · ${habits.length} habits`, icon: "📋", color: "#007AFF" },
+    { label: "Done", value: `${total ? Math.round((done / total) * 100) : 0}%`, detail: `${completedTasks} tasks · ${completedHabits} habits`, icon: "✅", color: "#34C759" },
+    { label: "Task hrs left", value: `${hoursLeft.toFixed(0)}h`, detail: "For unfinished tasks", icon: "⏱️", color: "#FF9500" },
+    { label: "Task overdue", value: overdue, detail: "Unfinished tasks", icon: "⚠️", color: overdue > 0 ? "#FF3B30" : "#8E8E93" },
+  ];
+
+  return (
+    <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+      {stats.map((stat, index) => (
+        <TiltCard key={stat.label} className="glass-card rounded-3xl p-4" style={{ animationDelay: `${index * 60}ms` }}>
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-xl">{stat.icon}</span>
+            <span className="text-xs font-medium rounded-full px-2 py-0.5" style={{ background: `${stat.color}18`, color: stat.color }}>{stat.label}</span>
+          </div>
+          <div className="text-3xl font-bold" style={{ color: "#1c1c1e", letterSpacing: "-1px", fontVariantNumeric: "tabular-nums" }}>{stat.value}</div>
+          <p className="text-xs mt-1" style={{ color: "#8E8E93" }}>{stat.detail}</p>
+        </TiltCard>
+      ))}
+    </div>
+  );
+}
+
 /* ── Task Card ── */
 function TaskCard({ task, onToggle, onDelete, onEdit }: {
   task: Task; onToggle: (id: string) => void; onDelete: (id: string) => void; onEdit: (t: Task) => void;
@@ -588,7 +619,7 @@ function HabitCard({ habit, onToggle, onDelete, onEdit }: { habit: Habit; onTogg
           <div className="flex items-center justify-between gap-2">
             <div>
               <h3 className={`text-sm font-semibold ${completedToday ? "habit-complete" : ""}`} style={{ color: "#1c1c1e" }}>{habit.name}</h3>
-              <p className="text-xs mt-1" style={{ color: "#8E8E93" }}>{streak > 0 ? `🔥 ${streak} day streak` : "Start your streak today"}</p>
+              {streak > 0 && <p className="text-xs mt-1" style={{ color: "#8E8E93" }}>🔥 {streak} day streak</p>}
             </div>
             <div className="flex items-center gap-1.5">
               <button onClick={() => onEdit(habit)} className="glass-btn w-7 h-7 rounded-full flex items-center justify-center text-xs" style={{ color: "#007AFF" }} aria-label={`Edit ${habit.name}`}>✎</button>
@@ -609,7 +640,7 @@ function HabitCard({ habit, onToggle, onDelete, onEdit }: { habit: Habit; onTogg
 }
 
 /* ── Calendar View ── */
-function CalendarView({ tasks }: { tasks: Task[] }) {
+function CalendarView({ tasks, habits }: { tasks: Task[]; habits: Habit[] }) {
   const today = new Date();
   const [viewDate, setViewDate] = useState(new Date(today.getFullYear(), today.getMonth(), 1));
   const [selectedDay, setSelectedDay] = useState<string>(today.toISOString().slice(0, 10));
@@ -625,6 +656,14 @@ function CalendarView({ tasks }: { tasks: Task[] }) {
     return map;
   }, [tasks]);
 
+  const habitsByDate = useMemo(() => {
+    const map: Record<string, Habit[]> = {};
+    habits.forEach(habit => {
+      new Set(habit.completedDates).forEach(date => { (map[date] ||= []).push(habit); });
+    });
+    return map;
+  }, [habits]);
+
   const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
   const DAYS = ["S", "M", "T", "W", "T", "F", "S"];
 
@@ -634,9 +673,12 @@ function CalendarView({ tasks }: { tasks: Task[] }) {
 
   const todayStr = today.toISOString().slice(0, 10);
   const selectedTasks = tasksByDate[selectedDay] || [];
+  const completedHabits = habitsByDate[selectedDay] || [];
 
   return (
-    <div className="flex flex-col lg:flex-row gap-4">
+    <div className="space-y-4">
+      <CalendarStatsBar tasks={tasks} habits={habits} selectedDay={selectedDay} />
+      <div className="flex flex-col lg:flex-row gap-4">
       {/* Month grid */}
       <TiltCard className="glass-card rounded-3xl p-5 flex-1">
         <div className="flex items-center justify-between mb-5">
@@ -657,9 +699,13 @@ function CalendarView({ tasks }: { tasks: Task[] }) {
                 if (!day) return <div key={ci} />;
                 const ds = `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
                 const dayTasks = tasksByDate[ds] || [];
+                const dayHabits = habitsByDate[ds] || [];
                 const isToday = ds === todayStr;
                 const isSel = ds === selectedDay;
-                const dotColors = [...new Set(dayTasks.slice(0, 3).map(t => TYPE_META[t.type].color))];
+                const markers = [
+                  ...[...new Set(dayTasks.map(t => TYPE_META[t.type].color))].map(color => ({ color, isHabit: false })),
+                  ...[...new Set(dayHabits.map(habit => habit.color))].map(color => ({ color, isHabit: true })),
+                ].slice(0, 3);
                 return (
                   <button key={ci} onClick={() => setSelectedDay(ds)}
                     className="relative flex flex-col items-center justify-center aspect-square rounded-full text-xs font-medium transition-all"
@@ -672,10 +718,10 @@ function CalendarView({ tasks }: { tasks: Task[] }) {
                       transition: "all 0.25s cubic-bezier(.34,1.56,.64,1)",
                     }}>
                     {day}
-                    {dotColors.length > 0 && (
+                    {markers.length > 0 && (
                       <div className="absolute bottom-1 flex gap-0.5">
-                        {dotColors.map((c, i) => (
-                          <span key={i} className="w-1 h-1 rounded-full" style={{ background: isSel ? "rgba(255,255,255,0.8)" : c }} />
+                        {markers.map((marker, i) => (
+                          <span key={i} className={`w-1 h-1 ${marker.isHabit ? "rounded-sm" : "rounded-full"}`} style={{ background: isSel ? "rgba(255,255,255,0.8)" : marker.color }} />
                         ))}
                       </div>
                     )}
@@ -692,34 +738,55 @@ function CalendarView({ tasks }: { tasks: Task[] }) {
         <h3 className="font-semibold text-sm mb-3" style={{ color: "#1c1c1e", letterSpacing: "-0.2px" }}>
           {selectedDay === todayStr ? "Today" : new Date(selectedDay + "T12:00:00").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })}
         </h3>
-        {selectedTasks.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-8 gap-2">
-            <span className="text-3xl">🌿</span>
-            <p className="text-xs text-center" style={{ color: "#8E8E93" }}>No tasks this day</p>
-          </div>
-        ) : (
-          <div className="space-y-2">
-            {selectedTasks.map(task => {
-              const tm = TYPE_META[task.type];
-              return (
-                <div key={task.id} className="rounded-2xl p-3 border" style={{ background: "rgba(255,255,255,0.55)", borderColor: "rgba(255,255,255,0.9)" }}>
-                  <div className="flex items-start gap-2">
-                    <span className="w-2 h-2 rounded-full mt-1 flex-shrink-0" style={{ background: tm.color }} />
-                    <div className="flex-1">
-                      <p className={`text-xs font-medium ${task.completed ? "task-done" : ""}`} style={{ color: "#1c1c1e" }}>{task.title}</p>
-                      <div className="flex gap-1.5 mt-1 flex-wrap">
-                        <span className="text-xs rounded-full px-1.5 py-0.5" style={{ background: tm.bg, color: tm.color }}>{tm.label}</span>
-                        <span className="text-xs rounded-full px-1.5 py-0.5" style={{ background: "rgba(0,0,0,0.05)", color: "#8E8E93" }}>{task.hours}h</span>
-                        {task.completed && <span className="text-xs rounded-full px-1.5 py-0.5" style={{ background: "rgba(52,199,89,0.12)", color: "#34C759" }}>✓ done</span>}
+        <section className="mb-4">
+          <h4 className="text-xs font-semibold mb-2" style={{ color: "#007AFF" }}>Tasks ({selectedTasks.length})</h4>
+          {selectedTasks.length === 0 ? (
+            <p className="text-xs py-2" style={{ color: "#8E8E93" }}>No tasks scheduled</p>
+          ) : (
+            <div className="space-y-2">
+              {selectedTasks.map(task => {
+                const tm = TYPE_META[task.type];
+                return (
+                  <div key={task.id} className="rounded-2xl p-3 border" style={{ background: "rgba(255,255,255,0.55)", borderColor: "rgba(255,255,255,0.9)" }}>
+                    <div className="flex items-start gap-2">
+                      <span className="w-2 h-2 rounded-full mt-1 flex-shrink-0" style={{ background: tm.color }} />
+                      <div className="flex-1">
+                        <p className={`text-xs font-medium ${task.completed ? "task-done" : ""}`} style={{ color: "#1c1c1e" }}>{task.title}</p>
+                        <div className="flex gap-1.5 mt-1 flex-wrap">
+                          <span className="text-xs rounded-full px-1.5 py-0.5" style={{ background: tm.bg, color: tm.color }}>{tm.label}</span>
+                          <span className="text-xs rounded-full px-1.5 py-0.5" style={{ background: "rgba(0,0,0,0.05)", color: "#8E8E93" }}>{task.hours}h</span>
+                          {task.completed && <span className="text-xs rounded-full px-1.5 py-0.5" style={{ background: "rgba(52,199,89,0.12)", color: "#34C759" }}>✓ done</span>}
+                        </div>
                       </div>
                     </div>
                   </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
+                );
+              })}
+            </div>
+          )}
+        </section>
+        <section>
+          <h4 className="text-xs font-semibold mb-2" style={{ color: "#34C759" }}>Habits ({completedHabits.length}/{habits.length} done)</h4>
+          {habits.length === 0 ? (
+            <p className="text-xs py-2" style={{ color: "#8E8E93" }}>No habits yet</p>
+          ) : (
+            <div className="space-y-2">
+              {habits.map(habit => {
+                const isCompleted = habit.completedDates.includes(selectedDay);
+                return (
+                  <div key={habit.id} className="rounded-2xl p-3 border flex items-center gap-2" style={{ background: "rgba(255,255,255,0.55)", borderColor: isCompleted ? `${habit.color}66` : "rgba(255,255,255,0.9)" }}>
+                    <span className="w-2 h-2 rounded-sm flex-shrink-0" style={{ background: habit.color }} />
+                    <span className="text-xs" aria-hidden="true">{habit.emoji}</span>
+                    <p className="text-xs font-medium flex-1" style={{ color: "#1c1c1e" }}>{habit.name}</p>
+                    <span className="text-xs rounded-full px-1.5 py-0.5" style={{ background: isCompleted ? "rgba(52,199,89,0.12)" : "rgba(0,0,0,0.05)", color: isCompleted ? "#34C759" : "#8E8E93" }}>{isCompleted ? "✓ done" : "○ pending"}</span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </section>
       </div>
+    </div>
     </div>
   );
 }
@@ -908,7 +975,7 @@ export default function App() {
       </header>
 
       <main className="max-w-5xl mx-auto px-4 sm:px-6 py-6 space-y-5">
-        {view === "habits" ? <HabitStats habits={habits} /> : <StatsBar tasks={view === "tasks" ? filtered : tasks} />}
+        {view === "habits" ? <HabitStats habits={habits} /> : view === "tasks" ? <StatsBar tasks={filtered} /> : null}
 
         {view === "habits" ? (
           <section className="space-y-4">
@@ -1008,7 +1075,7 @@ export default function App() {
             )}
           </>
         ) : (
-          <CalendarView tasks={tasks} />
+          <CalendarView tasks={tasks} habits={habits} />
         )}
       </main>
     </div>
