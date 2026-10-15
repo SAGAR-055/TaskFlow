@@ -9,6 +9,8 @@ interface Task {
   description: string;
   type: TaskType;
   deadline: string;
+  deadlineTime?: string;
+  reminderMinutesBefore?: number;
   hours: number;
   priority: Priority;
   completed: boolean;
@@ -21,7 +23,19 @@ interface Habit {
   emoji: string;
   color: string;
   completedDates: string[];
+  reminderTime?: string;
   createdAt: string;
+}
+
+type NotificationKind = "task-reminder" | "overdue" | "habit-reminder" | "daily-planning";
+
+interface AppNotification {
+  id: string;
+  kind: NotificationKind;
+  title: string;
+  message: string;
+  createdAt: string;
+  read: boolean;
 }
 
 const TYPE_META: Record<TaskType, { label: string; color: string; bg: string; emoji: string }> = {
@@ -45,6 +59,7 @@ function daysFromNow(n: number) {
 
 const TASKS_STORAGE_KEY = "taskflow.tasks";
 const HABITS_STORAGE_KEY = "taskflow.habits";
+const NOTIFICATIONS_STORAGE_KEY = "taskflow.notifications";
 const HABIT_EMOJIS = ["🌱", "📚", "💧", "🏃", "🧘", "🍎", "💤", "📝", "💻", "🎨", "🎸", "☀️", "🙏", "🚶", "🧹", "🧠"];
 
 interface InstallPromptEvent extends Event {
@@ -68,6 +83,8 @@ function isTask(value: unknown): value is Task {
     && typeof task.description === "string"
     && isTaskType(task.type)
     && typeof task.deadline === "string"
+    && (task.deadlineTime === undefined || typeof task.deadlineTime === "string")
+    && (task.reminderMinutesBefore === undefined || typeof task.reminderMinutesBefore === "number")
     && typeof task.hours === "number"
     && isPriority(task.priority)
     && typeof task.completed === "boolean"
@@ -101,6 +118,7 @@ function isHabit(value: unknown): value is Habit {
     && typeof habit.color === "string"
     && Array.isArray(habit.completedDates)
     && habit.completedDates.every(date => typeof date === "string")
+    && (habit.reminderTime === undefined || typeof habit.reminderTime === "string")
     && typeof habit.createdAt === "string";
 }
 
@@ -120,17 +138,57 @@ function loadHabits(): Habit[] {
   }
 }
 
+function isAppNotification(value: unknown): value is AppNotification {
+  if (typeof value !== "object" || value === null) return false;
+  const notification = value as Record<string, unknown>;
+  return typeof notification.id === "string"
+    && (notification.kind === "task-reminder" || notification.kind === "overdue" || notification.kind === "habit-reminder" || notification.kind === "daily-planning")
+    && typeof notification.title === "string"
+    && typeof notification.message === "string"
+    && typeof notification.createdAt === "string"
+    && typeof notification.read === "boolean";
+}
+
+function loadNotifications(): AppNotification[] {
+  try {
+    const stored = localStorage.getItem(NOTIFICATIONS_STORAGE_KEY);
+    if (!stored) return [];
+    const parsed: unknown = JSON.parse(stored);
+    if (!Array.isArray(parsed) || !parsed.every(isAppNotification)) {
+      console.error("TaskFlow could not restore notifications because stored data is invalid.");
+      return [];
+    }
+    return parsed;
+  } catch (error) {
+    console.error("TaskFlow could not restore notifications from local storage.", error);
+    return [];
+  }
+}
+
 function dateOffset(offset: number) {
   const date = new Date();
   date.setDate(date.getDate() + offset);
   return date.toISOString().slice(0, 10);
 }
 
+function localDateString(date: Date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+function getTaskDeadline(task: Task) {
+  return new Date(`${task.deadline}T${task.deadlineTime || "23:59"}:00`);
+}
+
+function isTaskOverdue(task: Task, now = new Date()) {
+  const deadline = getTaskDeadline(task);
+  return !task.completed && !Number.isNaN(deadline.getTime()) && deadline < now;
+}
+
 /* ── Habit Modal ── */
 function HabitModal({ habit, onClose, onSave }: { habit?: Habit; onClose: () => void; onSave: (habit: Habit) => void }) {
   const [form, setForm] = useState(() => habit
-    ? { name: habit.name, emoji: habit.emoji, color: habit.color }
-    : { name: "", emoji: "🌱", color: "#34C759" });
+    ? { name: habit.name, emoji: habit.emoji, color: habit.color, reminderTime: habit.reminderTime || "22:00" }
+    : { name: "", emoji: "🌱", color: "#34C759", reminderTime: "22:00" });
 
   function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -169,6 +227,12 @@ function HabitModal({ habit, onClose, onSave }: { habit?: Habit; onClose: () => 
               <input type="color" value={form.color} onChange={e => setForm(p => ({ ...p, color: e.target.value }))}
                 className="w-full h-12 p-1 rounded-2xl border" style={{ background: "rgba(255,255,255,0.6)", borderColor: "rgba(255,255,255,0.9)" }} />
             </div>
+          </div>
+          <div>
+            <label className="text-xs font-medium mb-1.5 block" style={{ color: "#636366" }}>Daily reminder</label>
+            <input type="time" required value={form.reminderTime} onChange={e => setForm(p => ({ ...p, reminderTime: e.target.value }))}
+              className="w-full px-4 py-3 rounded-2xl text-sm border" style={{ background: "rgba(255,255,255,0.6)", borderColor: "rgba(255,255,255,0.9)", color: "#1c1c1e", colorScheme: "light" }} />
+            <p className="text-xs mt-1.5" style={{ color: "#8E8E93" }}>We’ll remind you each day until you complete this habit. Defaults to 10:00 PM.</p>
           </div>
           <div className="grid grid-cols-8 gap-2" aria-label="Choose a habit icon">
             {HABIT_EMOJIS.map(emoji => (
@@ -225,12 +289,12 @@ function TiltCard({ children, className = "", style = {} }: { children: React.Re
 
 /* ── Add Task Modal ── */
 function AddTaskModal({ onClose, onAdd }: { onClose: () => void; onAdd: (t: Task) => void }) {
-  const [form, setForm] = useState({ title: "", description: "", type: "daily" as TaskType, deadline: daysFromNow(0), hours: "", priority: "medium" as Priority });
+  const [form, setForm] = useState({ title: "", description: "", type: "daily" as TaskType, deadline: daysFromNow(0), deadlineTime: "23:59", reminderMinutesBefore: "30", hours: "", priority: "medium" as Priority });
 
   function submit(e: React.FormEvent) {
     e.preventDefault();
     if (!form.title.trim()) return;
-    onAdd({ id: uid(), ...form, title: form.title.trim(), description: form.description.trim(), hours: parseFloat(form.hours) || 1, completed: false, createdAt: new Date().toISOString() });
+    onAdd({ id: uid(), ...form, reminderMinutesBefore: Number(form.reminderMinutesBefore), title: form.title.trim(), description: form.description.trim(), hours: parseFloat(form.hours) || 1, completed: false, createdAt: new Date().toISOString() });
     onClose();
   }
 
@@ -278,6 +342,24 @@ function AddTaskModal({ onClose, onAdd }: { onClose: () => void; onAdd: (t: Task
                 className="w-full px-4 py-3 rounded-2xl text-sm border" style={{ background: "rgba(255,255,255,0.6)", borderColor: "rgba(255,255,255,0.9)", color: "#1c1c1e", colorScheme: "light" }} />
             </div>
             <div>
+              <label className="text-xs font-medium mb-1.5 block" style={{ color: "#636366" }}>Due time</label>
+              <input type="time" required value={form.deadlineTime} onChange={e => setForm(p => ({ ...p, deadlineTime: e.target.value }))}
+                className="w-full px-4 py-3 rounded-2xl text-sm border" style={{ background: "rgba(255,255,255,0.6)", borderColor: "rgba(255,255,255,0.9)", color: "#1c1c1e", colorScheme: "light" }} />
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs font-medium mb-1.5 block" style={{ color: "#636366" }}>Remind me</label>
+              <select value={form.reminderMinutesBefore} onChange={e => setForm(p => ({ ...p, reminderMinutesBefore: e.target.value }))}
+                className="w-full px-4 py-3 rounded-2xl text-sm border" style={{ background: "rgba(255,255,255,0.6)", borderColor: "rgba(255,255,255,0.9)", color: "#1c1c1e" }}>
+                <option value="5">5 minutes before</option>
+                <option value="15">15 minutes before</option>
+                <option value="30">30 minutes before</option>
+                <option value="60">1 hour before</option>
+                <option value="1440">1 day before</option>
+              </select>
+            </div>
+            <div>
               <label className="text-xs font-medium mb-1.5 block" style={{ color: "#636366" }}>Hours Required</label>
               <input type="number" min="0.5" step="0.5" required value={form.hours} onChange={e => setForm(p => ({ ...p, hours: e.target.value }))} placeholder="e.g. 2.5"
                 className="w-full px-4 py-3 rounded-2xl text-sm border" style={{ background: "rgba(255,255,255,0.6)", borderColor: "rgba(255,255,255,0.9)", color: "#1c1c1e" }} />
@@ -303,6 +385,8 @@ function EditTaskModal({ task, onClose, onSave }: { task: Task; onClose: () => v
     description: task.description,
     type: task.type,
     deadline: task.deadline,
+    deadlineTime: task.deadlineTime || "23:59",
+    reminderMinutesBefore: String(task.reminderMinutesBefore ?? 30),
     hours: String(task.hours),
     priority: task.priority,
   });
@@ -310,7 +394,7 @@ function EditTaskModal({ task, onClose, onSave }: { task: Task; onClose: () => v
   function submit(e: React.FormEvent) {
     e.preventDefault();
     if (!form.title.trim()) return;
-    onSave({ ...task, ...form, title: form.title.trim(), description: form.description.trim(), hours: parseFloat(form.hours) || 1 });
+    onSave({ ...task, ...form, reminderMinutesBefore: Number(form.reminderMinutesBefore), title: form.title.trim(), description: form.description.trim(), hours: parseFloat(form.hours) || 1 });
     onClose();
   }
 
@@ -359,6 +443,24 @@ function EditTaskModal({ task, onClose, onSave }: { task: Task; onClose: () => v
               <label className="text-xs font-medium mb-1.5 block" style={{ color: "#636366" }}>Deadline</label>
               <input type="date" required value={form.deadline} onChange={e => setForm(p => ({ ...p, deadline: e.target.value }))}
                 className="w-full px-4 py-3 rounded-2xl text-sm border" style={{ background: "rgba(255,255,255,0.6)", borderColor: "rgba(255,255,255,0.9)", color: "#1c1c1e", colorScheme: "light" }} />
+            </div>
+            <div>
+              <label className="text-xs font-medium mb-1.5 block" style={{ color: "#636366" }}>Due time</label>
+              <input type="time" required value={form.deadlineTime} onChange={e => setForm(p => ({ ...p, deadlineTime: e.target.value }))}
+                className="w-full px-4 py-3 rounded-2xl text-sm border" style={{ background: "rgba(255,255,255,0.6)", borderColor: "rgba(255,255,255,0.9)", color: "#1c1c1e", colorScheme: "light" }} />
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs font-medium mb-1.5 block" style={{ color: "#636366" }}>Remind me</label>
+              <select value={form.reminderMinutesBefore} onChange={e => setForm(p => ({ ...p, reminderMinutesBefore: e.target.value }))}
+                className="w-full px-4 py-3 rounded-2xl text-sm border" style={{ background: "rgba(255,255,255,0.6)", borderColor: "rgba(255,255,255,0.9)", color: "#1c1c1e" }}>
+                <option value="5">5 minutes before</option>
+                <option value="15">15 minutes before</option>
+                <option value="30">30 minutes before</option>
+                <option value="60">1 hour before</option>
+                <option value="1440">1 day before</option>
+              </select>
             </div>
             <div>
               <label className="text-xs font-medium mb-1.5 block" style={{ color: "#636366" }}>Hours Required</label>
@@ -420,7 +522,7 @@ function StatsBar({ tasks }: { tasks: Task[] }) {
   const total = tasks.length;
   const done = tasks.filter(t => t.completed).length;
   const hoursLeft = tasks.filter(t => !t.completed).reduce((s, t) => s + t.hours, 0);
-  const overdue = tasks.filter(t => !t.completed && t.deadline < new Date().toISOString().slice(0, 10)).length;
+  const overdue = tasks.filter(task => isTaskOverdue(task)).length;
   const pct = total ? Math.round((done / total) * 100) : 0;
 
   const stats = [
@@ -451,8 +553,7 @@ function CalendarStatsBar({ tasks, habits, selectedDay }: { tasks: Task[]; habit
   const completedHabits = habits.filter(habit => habit.completedDates.includes(selectedDay)).length;
   const done = completedTasks + completedHabits;
   const hoursLeft = tasks.filter(task => !task.completed).reduce((sum, task) => sum + task.hours, 0);
-  const today = new Date().toISOString().slice(0, 10);
-  const overdue = tasks.filter(task => !task.completed && task.deadline < today).length;
+  const overdue = tasks.filter(task => isTaskOverdue(task)).length;
   const stats = [
     { label: "Tasks + habits", value: total, detail: `${tasks.length} tasks · ${habits.length} habits`, icon: "📋", color: "#007AFF" },
     { label: "Done", value: `${total ? Math.round((done / total) * 100) : 0}%`, detail: `${completedTasks} tasks · ${completedHabits} habits`, icon: "✅", color: "#34C759" },
@@ -482,7 +583,7 @@ function TaskCard({ task, onToggle, onDelete, onEdit }: {
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const today = new Date().toISOString().slice(0, 10);
-  const isOverdue = !task.completed && task.deadline < today;
+  const isOverdue = isTaskOverdue(task);
   const daysLeft = Math.ceil((new Date(task.deadline).getTime() - new Date(today).getTime()) / 86400000);
   const tm = TYPE_META[task.type];
   const pm = PRIORITY_META[task.priority];
@@ -527,13 +628,13 @@ function TaskCard({ task, onToggle, onDelete, onEdit }: {
           )}
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-xs font-medium flex items-center gap-1 rounded-full px-2 py-0.5" style={{ background: isOverdue && !task.completed ? "rgba(255,59,48,0.12)" : "rgba(0,0,0,0.05)", color: isOverdue && !task.completed ? "#FF3B30" : "#8E8E93" }}>
-              📅 {isOverdue && !task.completed ? `${Math.abs(daysLeft)}d overdue` : task.completed ? "Completed" : daysLeft === 0 ? "Due today" : `${daysLeft}d left`}
+              📅 {isOverdue ? daysLeft === 0 ? "Overdue" : `${Math.abs(daysLeft)}d overdue` : task.completed ? "Completed" : daysLeft === 0 ? "Due today" : `${daysLeft}d left`}
             </span>
             <span className="text-xs font-medium rounded-full px-2 py-0.5" style={{ background: "rgba(0,0,0,0.05)", color: "#8E8E93" }}>
               ⏱ {task.hours}h
             </span>
             <span className="text-xs font-medium rounded-full px-2 py-0.5" style={{ background: "rgba(0,0,0,0.05)", color: "#8E8E93" }}>
-              🗓 {task.deadline}
+              🗓 {task.deadline} · {task.deadlineTime || "23:59"}
             </span>
           </div>
         </div>
@@ -620,6 +721,7 @@ function HabitCard({ habit, onToggle, onDelete, onEdit }: { habit: Habit; onTogg
             <div>
               <h3 className={`text-sm font-semibold ${completedToday ? "habit-complete" : ""}`} style={{ color: "#1c1c1e" }}>{habit.name}</h3>
               {streak > 0 && <p className="text-xs mt-1" style={{ color: "#8E8E93" }}>🔥 {streak} day streak</p>}
+              <p className="text-xs mt-1" style={{ color: "#8E8E93" }}>⏰ Daily at {habit.reminderTime || "22:00"}</p>
             </div>
             <div className="flex items-center gap-1.5">
               <button onClick={() => onEdit(habit)} className="glass-btn w-7 h-7 rounded-full flex items-center justify-center text-xs" style={{ color: "#007AFF" }} aria-label={`Edit ${habit.name}`}>✎</button>
@@ -755,6 +857,7 @@ function CalendarView({ tasks, habits }: { tasks: Task[]; habits: Habit[] }) {
                         <div className="flex gap-1.5 mt-1 flex-wrap">
                           <span className="text-xs rounded-full px-1.5 py-0.5" style={{ background: tm.bg, color: tm.color }}>{tm.label}</span>
                           <span className="text-xs rounded-full px-1.5 py-0.5" style={{ background: "rgba(0,0,0,0.05)", color: "#8E8E93" }}>{task.hours}h</span>
+                          <span className="text-xs rounded-full px-1.5 py-0.5" style={{ background: "rgba(0,0,0,0.05)", color: "#8E8E93" }}>Due {task.deadlineTime || "23:59"}</span>
                           {task.completed && <span className="text-xs rounded-full px-1.5 py-0.5" style={{ background: "rgba(52,199,89,0.12)", color: "#34C759" }}>✓ done</span>}
                         </div>
                       </div>
@@ -791,10 +894,89 @@ function CalendarView({ tasks, habits }: { tasks: Task[]; habits: Habit[] }) {
   );
 }
 
+function NotificationCenter({ notifications, permission, onRequestPermission, onMarkRead, onMarkAllRead, onAddTask }: {
+  notifications: AppNotification[];
+  permission: NotificationPermission | "unsupported";
+  onRequestPermission: () => void;
+  onMarkRead: (id: string) => void;
+  onMarkAllRead: () => void;
+  onAddTask: () => void;
+}) {
+  const unreadCount = notifications.filter(notification => !notification.read).length;
+  const centerRef = useRef<HTMLDetailsElement>(null);
+
+  useEffect(() => {
+    function closeOnOutsideClick(event: PointerEvent) {
+      if (centerRef.current?.open && !centerRef.current.contains(event.target as Node)) {
+        centerRef.current.open = false;
+      }
+    }
+
+    document.addEventListener("pointerdown", closeOnOutsideClick);
+    return () => document.removeEventListener("pointerdown", closeOnOutsideClick);
+  }, []);
+
+  return (
+    <div className="relative">
+      <details ref={centerRef} className="group">
+        <summary aria-label={`Notifications${unreadCount ? `, ${unreadCount} unread` : ""}`} className="notification-trigger glass-btn relative flex h-10 w-10 cursor-pointer list-none items-center justify-center rounded-2xl text-lg" style={{ color: "#007AFF" }}>
+          <span aria-hidden="true">🔔</span>
+          {unreadCount > 0 && <span className="absolute -right-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-full px-1 text-[10px] font-bold text-white" style={{ background: "#FF3B30" }}>{unreadCount > 99 ? "99+" : unreadCount}</span>}
+        </summary>
+        <div className="notification-panel absolute right-0 top-12 z-50 w-[min(24rem,calc(100vw-2rem))] overflow-hidden rounded-3xl">
+          <div className="flex items-center justify-between border-b border-black/5 px-4 py-3">
+            <div>
+              <h2 className="text-sm font-semibold" style={{ color: "#1c1c1e" }}>Notifications</h2>
+              <p className="text-xs" style={{ color: "#8E8E93" }}>{unreadCount ? `${unreadCount} unread` : "You're all caught up"}</p>
+            </div>
+            {unreadCount > 0 && <button onClick={onMarkAllRead} className="text-xs font-semibold" style={{ color: "#007AFF" }}>Mark all read</button>}
+          </div>
+          {permission !== "granted" && (
+            <div className="border-b border-black/5 px-4 py-3">
+              <p className="text-xs leading-relaxed" style={{ color: "#636366" }}>
+                {permission === "unsupported" ? "Browser notifications aren't supported here." : permission === "denied" ? "Browser notifications are blocked. Allow them in your browser settings to receive reminder pop-ups." : "Enable browser notifications to see reminder pop-ups while TaskFlow is running."}
+              </p>
+              {permission === "default" && <button onClick={onRequestPermission} className="mt-2 rounded-xl px-3 py-2 text-xs font-semibold text-white" style={{ background: "#007AFF" }}>Enable notifications</button>}
+            </div>
+          )}
+          <p className="border-b border-black/5 px-4 py-2 text-[10px]" style={{ color: "#8E8E93" }}>Reminders run while TaskFlow is open. Background delivery requires a push-notification service.</p>
+          <div className="max-h-[min(60vh,26rem)] overflow-y-auto">
+            {notifications.length === 0 ? (
+              <div className="px-5 py-10 text-center">
+                <span className="text-3xl" aria-hidden="true">🔔</span>
+                <p className="mt-2 text-sm font-medium" style={{ color: "#636366" }}>No notifications yet</p>
+                <p className="mt-1 text-xs" style={{ color: "#8E8E93" }}>Task and habit reminders will show up here.</p>
+              </div>
+            ) : notifications.map(notification => (
+              <div key={notification.id} className="flex gap-3 border-b border-black/5 px-4 py-3 last:border-0" style={{ background: notification.read ? "transparent" : "rgba(0,122,255,0.045)" }}>
+                <span className="mt-0.5 text-base" aria-hidden="true">
+                  {notification.kind === "overdue" ? "⚠️" : notification.kind === "habit-reminder" ? "🌱" : notification.kind === "daily-planning" ? "📝" : "⏰"}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p className="text-xs font-semibold" style={{ color: "#1c1c1e" }}>{notification.title}</p>
+                  <p className="mt-0.5 text-xs leading-relaxed" style={{ color: "#636366" }}>{notification.message}</p>
+                  <p className="mt-1 text-[10px]" style={{ color: "#8E8E93" }}>{new Date(notification.createdAt).toLocaleString()}</p>
+                  {notification.kind === "daily-planning" && <button onClick={() => { onMarkRead(notification.id); onAddTask(); }} className="mt-2 rounded-lg px-2.5 py-1.5 text-xs font-semibold" style={{ color: "#007AFF", background: "rgba(0,122,255,0.1)" }}>Add today’s task</button>}
+                </div>
+                {!notification.read && <button onClick={() => onMarkRead(notification.id)} className="self-start whitespace-nowrap text-[10px] font-semibold" style={{ color: "#007AFF" }}>Mark read</button>}
+              </div>
+            ))}
+          </div>
+        </div>
+      </details>
+    </div>
+  );
+}
+
 /* ── Main App ── */
 export default function App() {
   const [tasks, setTasks] = useState<Task[]>(loadTasks);
   const [habits, setHabits] = useState<Habit[]>(loadHabits);
+  const [notifications, setNotifications] = useState<AppNotification[]>(loadNotifications);
+  const sentNotificationIds = useRef(new Set(notifications.map(notification => notification.id)));
+  const [notificationPermission, setNotificationPermission] = useState<NotificationPermission | "unsupported">(
+    () => "Notification" in window ? Notification.permission : "unsupported",
+  );
   const [installPrompt, setInstallPrompt] = useState<InstallPromptEvent | null>(null);
   const [isInstalled, setIsInstalled] = useState(false);
   const [view, setView] = useState<View>("tasks");
@@ -853,6 +1035,100 @@ export default function App() {
       console.error("TaskFlow could not save habits to local storage.", error);
     }
   }, [habits]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(NOTIFICATIONS_STORAGE_KEY, JSON.stringify(notifications));
+    } catch (error) {
+      console.error("TaskFlow could not save notifications to local storage.", error);
+    }
+  }, [notifications]);
+
+  function publishNotification(id: string, kind: NotificationKind, title: string, message: string) {
+    if (sentNotificationIds.current.has(id)) return;
+    sentNotificationIds.current.add(id);
+    const notification: AppNotification = { id, kind, title, message, createdAt: new Date().toISOString(), read: false };
+    setNotifications(previous => [notification, ...previous].slice(0, 200));
+
+    if (notificationPermission === "granted") {
+      try {
+        new Notification(title, { body: message, icon: `${import.meta.env.BASE_URL}Icon-192.png`, tag: id });
+      } catch (error) {
+        console.error("TaskFlow could not display a browser notification.", error);
+      }
+    }
+  }
+
+  useEffect(() => {
+    function checkReminders() {
+      const now = new Date();
+      const today = localDateString(now);
+      const localTime = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+
+      tasks.forEach(task => {
+        if (task.completed) return;
+        const deadline = getTaskDeadline(task);
+        if (Number.isNaN(deadline.getTime())) return;
+        const deadlineKey = `${task.deadline}T${task.deadlineTime || "23:59"}`;
+        if (deadline <= now) {
+          publishNotification(`overdue:${task.id}:${deadlineKey}`, "overdue", "Task overdue", `“${task.title}” passed its deadline without being completed.`);
+          return;
+        }
+
+        const leadMinutes = task.reminderMinutesBefore ?? 30;
+        const reminderTime = new Date(deadline.getTime() - leadMinutes * 60_000);
+        if (reminderTime <= now) {
+          const leadText = leadMinutes === 1440 ? "in 1 day" : leadMinutes >= 60 ? `in ${leadMinutes / 60} hour${leadMinutes === 60 ? "" : "s"}` : `in ${leadMinutes} minutes`;
+          publishNotification(`task-reminder:${task.id}:${deadlineKey}:${leadMinutes}`, "task-reminder", "Task deadline coming up", `“${task.title}” is due ${leadText}.`);
+        }
+      });
+
+      habits.forEach(habit => {
+        const reminderTime = habit.reminderTime || "22:00";
+        if (localTime >= reminderTime && !habit.completedDates.includes(today)) {
+          publishNotification(`habit-reminder:${habit.id}:${today}`, "habit-reminder", "Habit reminder", `Time to complete “${habit.name}”.`);
+        }
+      });
+
+      if (localTime >= "09:00") {
+        publishNotification(`daily-planning:${today}`, "daily-planning", "Plan your day", "Take a moment to add the tasks you want to get done today.");
+      }
+    }
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") checkReminders();
+    };
+    checkReminders();
+    const interval = window.setInterval(checkReminders, 30_000);
+    window.addEventListener("focus", checkReminders);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener("focus", checkReminders);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [tasks, habits, notificationPermission]);
+
+  async function requestNotificationPermission() {
+    if (!("Notification" in window)) {
+      setNotificationPermission("unsupported");
+      return;
+    }
+    try {
+      const permission = await Notification.requestPermission();
+      setNotificationPermission(permission);
+    } catch (error) {
+      console.error("TaskFlow could not request browser notification permission.", error);
+    }
+  }
+
+  function markNotificationRead(id: string) {
+    setNotifications(previous => previous.map(notification => notification.id === id ? { ...notification, read: true } : notification));
+  }
+
+  function markAllNotificationsRead() {
+    setNotifications(previous => previous.map(notification => ({ ...notification, read: true })));
+  }
 
   function toggleTask(id: string) { setTasks(p => p.map(t => t.id === id ? { ...t, completed: !t.completed } : t)); }
   function deleteTask(id: string) { setTasks(p => p.filter(t => t.id !== id)); }
@@ -952,6 +1228,14 @@ export default function App() {
               <span className="text-base leading-none font-light">+</span>
               <span className="hidden sm:inline">{view === "habits" ? "New Habit" : "New Task"}</span>
             </button>
+            <NotificationCenter
+              notifications={notifications}
+              permission={notificationPermission}
+              onRequestPermission={requestNotificationPermission}
+              onMarkRead={markNotificationRead}
+              onMarkAllRead={markAllNotificationsRead}
+              onAddTask={() => { setView("tasks"); setShowModal(true); }}
+            />
           </div>
         </div>
         {/* Mobile view toggle */}
