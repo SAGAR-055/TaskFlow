@@ -1,4 +1,12 @@
 import { useState, useMemo, useRef, useEffect } from "react";
+import type { User } from "firebase/auth";
+import {
+  firebasePushConfigured,
+  signInForPush,
+  subscribeDeviceForPush,
+  subscribeToPushUser,
+  syncReminderData,
+} from "./firebase-push";
 
 type TaskType = "daily" | "weekly" | "monthly" | "yearly";
 type Priority = "low" | "medium" | "high";
@@ -73,6 +81,10 @@ function isTaskType(value: unknown): value is TaskType {
 
 function isPriority(value: unknown): value is Priority {
   return value === "low" || value === "medium" || value === "high";
+}
+
+function isNotificationKind(value: unknown): value is NotificationKind {
+  return value === "task-reminder" || value === "overdue" || value === "habit-reminder" || value === "daily-planning";
 }
 
 function isTask(value: unknown): value is Task {
@@ -168,7 +180,7 @@ function loadNotifications(): AppNotification[] {
 function dateOffset(offset: number) {
   const date = new Date();
   date.setDate(date.getDate() + offset);
-  return date.toISOString().slice(0, 10);
+  return localDateString(date);
 }
 
 function localDateString(date: Date) {
@@ -894,9 +906,12 @@ function CalendarView({ tasks, habits }: { tasks: Task[]; habits: Habit[] }) {
   );
 }
 
-function NotificationCenter({ notifications, permission, onRequestPermission, onMarkRead, onMarkAllRead, onAddTask }: {
+function NotificationCenter({ notifications, permission, pushEnabled, pushConfigured, pushError, onRequestPermission, onMarkRead, onMarkAllRead, onAddTask }: {
   notifications: AppNotification[];
   permission: NotificationPermission | "unsupported";
+  pushEnabled: boolean;
+  pushConfigured: boolean;
+  pushError: string | null;
   onRequestPermission: () => void;
   onMarkRead: (id: string) => void;
   onMarkAllRead: () => void;
@@ -923,7 +938,7 @@ function NotificationCenter({ notifications, permission, onRequestPermission, on
           <span aria-hidden="true">🔔</span>
           {unreadCount > 0 && <span className="absolute -right-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-full px-1 text-[10px] font-bold text-white" style={{ background: "#FF3B30" }}>{unreadCount > 99 ? "99+" : unreadCount}</span>}
         </summary>
-        <div className="notification-panel absolute right-0 top-12 z-50 w-[min(24rem,calc(100vw-2rem))] overflow-hidden rounded-3xl">
+        <div className="notification-panel absolute right-0 top-12 z-50 w-[min(24rem,calc(100vw-2rem))] origin-top-right overflow-hidden rounded-3xl">
           <div className="flex items-center justify-between border-b border-black/5 px-4 py-3">
             <div>
               <h2 className="text-sm font-semibold" style={{ color: "#1c1c1e" }}>Notifications</h2>
@@ -931,15 +946,16 @@ function NotificationCenter({ notifications, permission, onRequestPermission, on
             </div>
             {unreadCount > 0 && <button onClick={onMarkAllRead} className="text-xs font-semibold" style={{ color: "#007AFF" }}>Mark all read</button>}
           </div>
-          {permission !== "granted" && (
+          {!pushEnabled && (
             <div className="border-b border-black/5 px-4 py-3">
               <p className="text-xs leading-relaxed" style={{ color: "#636366" }}>
-                {permission === "unsupported" ? "Browser notifications aren't supported here." : permission === "denied" ? "Browser notifications are blocked. Allow them in your browser settings to receive reminder pop-ups." : "Enable browser notifications to see reminder pop-ups while TaskFlow is running."}
+                {permission === "unsupported" ? "Browser notifications aren't supported here." : permission === "denied" ? "Browser notifications are blocked. Allow them in your browser settings to receive reminder pop-ups." : !pushConfigured ? "Background push needs Firebase project configuration before it can be enabled." : permission === "granted" ? "Link this device to receive scheduled reminders when TaskFlow is closed." : "Enable background push to receive reminders when TaskFlow is closed."}
               </p>
-              {permission === "default" && <button onClick={onRequestPermission} className="mt-2 rounded-xl px-3 py-2 text-xs font-semibold text-white" style={{ background: "#007AFF" }}>Enable notifications</button>}
+              {pushConfigured && permission !== "unsupported" && permission !== "denied" && <button onClick={onRequestPermission} className="mt-2 rounded-xl px-3 py-2 text-xs font-semibold text-white" style={{ background: "#007AFF" }}>Enable background push</button>}
             </div>
           )}
-          <p className="border-b border-black/5 px-4 py-2 text-[10px]" style={{ color: "#8E8E93" }}>Reminders run while TaskFlow is open. Background delivery requires a push-notification service.</p>
+          {pushError && <p role="alert" className="border-b border-black/5 px-4 py-2 text-xs" style={{ color: "#FF3B30" }}>{pushError}</p>}
+          <p className="border-b border-black/5 px-4 py-2 text-[10px]" style={{ color: "#8E8E93" }}>{pushEnabled ? "Background push is enabled for this device." : "Reminders run while TaskFlow is open until background push is configured."}</p>
           <div className="max-h-[min(60vh,26rem)] overflow-y-auto">
             {notifications.length === 0 ? (
               <div className="px-5 py-10 text-center">
@@ -974,6 +990,9 @@ export default function App() {
   const [habits, setHabits] = useState<Habit[]>(loadHabits);
   const [notifications, setNotifications] = useState<AppNotification[]>(loadNotifications);
   const sentNotificationIds = useRef(new Set(notifications.map(notification => notification.id)));
+  const [firebaseUser, setFirebaseUser] = useState<User | null>(null);
+  const [pushEnabled, setPushEnabled] = useState(false);
+  const [pushError, setPushError] = useState<string | null>(null);
   const [notificationPermission, setNotificationPermission] = useState<NotificationPermission | "unsupported">(
     () => "Notification" in window ? Notification.permission : "unsupported",
   );
@@ -987,6 +1006,61 @@ export default function App() {
   const [statusFilter, setStatusFilter] = useState<"all" | "pending" | "completed">("all");
   const [showHabitModal, setShowHabitModal] = useState(false);
   const [editingHabit, setEditingHabit] = useState<Habit | null>(null);
+
+  useEffect(() => subscribeToPushUser(setFirebaseUser), []);
+
+  useEffect(() => {
+    if (!firebaseUser) return;
+    void syncReminderData(firebaseUser, tasks, habits).catch(error => {
+      console.error("TaskFlow could not sync reminder schedules to Firebase.", error);
+      setPushError(error instanceof Error ? error.message : "Could not sync reminder schedules to Firebase.");
+    });
+  }, [firebaseUser, tasks, habits]);
+
+  useEffect(() => {
+    if (!firebaseUser || notificationPermission !== "granted") return;
+    let active = true;
+    void subscribeDeviceForPush(firebaseUser).then(() => {
+      if (active) {
+        setPushEnabled(true);
+        setPushError(null);
+      }
+    }).catch(error => {
+      console.error("TaskFlow could not restore its background push subscription.", error);
+      if (active) setPushError(error instanceof Error ? error.message : "Could not restore the background push subscription.");
+    });
+    return () => { active = false; };
+  }, [firebaseUser, notificationPermission]);
+
+  useEffect(() => {
+    if (!("serviceWorker" in navigator)) return;
+    function receivePush(event: MessageEvent<unknown>) {
+      if (typeof event.data !== "object" || event.data === null) return;
+      const message = event.data as { type?: unknown; notification?: unknown };
+      if (message.type !== "taskflow-push" || typeof message.notification !== "object" || message.notification === null) return;
+      const data = message.notification as Record<string, unknown>;
+      if (
+        typeof data.id !== "string"
+        || !isNotificationKind(data.kind)
+        || typeof data.title !== "string"
+        || typeof data.body !== "string"
+        || typeof data.createdAt !== "string"
+      ) return;
+      const notification: AppNotification = {
+        id: data.id,
+        kind: data.kind,
+        title: data.title,
+        message: data.body,
+        createdAt: data.createdAt,
+        read: false,
+      };
+      if (!isAppNotification(notification) || sentNotificationIds.current.has(notification.id)) return;
+      sentNotificationIds.current.add(notification.id);
+      setNotifications(previous => [notification, ...previous].slice(0, 200));
+    }
+    navigator.serviceWorker.addEventListener("message", receivePush);
+    return () => navigator.serviceWorker.removeEventListener("message", receivePush);
+  }, []);
 
   useEffect(() => {
     setIsInstalled(window.matchMedia("(display-mode: standalone)").matches);
@@ -1050,7 +1124,7 @@ export default function App() {
     const notification: AppNotification = { id, kind, title, message, createdAt: new Date().toISOString(), read: false };
     setNotifications(previous => [notification, ...previous].slice(0, 200));
 
-    if (notificationPermission === "granted") {
+    if (notificationPermission === "granted" && !pushEnabled) {
       try {
         new Notification(title, { body: message, icon: `${import.meta.env.BASE_URL}Icon-192.png`, tag: id });
       } catch (error) {
@@ -1107,18 +1181,30 @@ export default function App() {
       window.removeEventListener("focus", checkReminders);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
-  }, [tasks, habits, notificationPermission]);
+  }, [tasks, habits, notificationPermission, pushEnabled]);
 
   async function requestNotificationPermission() {
     if (!("Notification" in window)) {
       setNotificationPermission("unsupported");
       return;
     }
+    if (!firebasePushConfigured) {
+      setPushError("Background push is not configured. Add the Firebase web configuration and VAPID key, then rebuild the app.");
+      return;
+    }
     try {
-      const permission = await Notification.requestPermission();
+      const permission = Notification.permission === "default" ? await Notification.requestPermission() : Notification.permission;
       setNotificationPermission(permission);
+      if (permission !== "granted") return;
+      setPushError(null);
+      const user = await signInForPush();
+      await subscribeDeviceForPush(user);
+      await syncReminderData(user, tasks, habits);
+      setFirebaseUser(user);
+      setPushEnabled(true);
     } catch (error) {
       console.error("TaskFlow could not request browser notification permission.", error);
+      setPushError(error instanceof Error ? error.message : "Could not enable background push.");
     }
   }
 
@@ -1176,7 +1262,7 @@ export default function App() {
       {/* Header */}
       <header className="sticky top-0 z-40 glass border-b border-white/60">
         <div className="max-w-5xl mx-auto px-4 sm:px-6 py-3 flex items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
+          <div className="order-1 flex items-center gap-3 sm:order-1">
             <img src={`${import.meta.env.BASE_URL}Icon.png`} alt="TaskFlow" width={36} height={36}
               className="w-9 h-9 rounded-2xl bg-white/80 p-0.5 object-contain shadow-lg ring-1 ring-blue-100"
               style={{ boxShadow: "0 4px 14px rgba(0,122,255,0.4)" }} />
@@ -1187,7 +1273,7 @@ export default function App() {
               </p>
             </div>
           </div>
-          <div className="flex flex-1 min-w-0 items-center gap-2 ml-3">
+          <div className="order-2 flex flex-1 min-w-0 items-center justify-end gap-2 sm:order-2 sm:ml-3">
             {installPrompt && !isInstalled && (
               <button onClick={installApp}
                 className="glass-btn rounded-2xl px-3 py-2 text-sm font-semibold whitespace-nowrap"
@@ -1222,20 +1308,25 @@ export default function App() {
                 📅
               </button>
             </div>
+            <div className="order-2 sm:order-2">
+              <NotificationCenter
+                notifications={notifications}
+                permission={notificationPermission}
+                pushEnabled={pushEnabled}
+                pushConfigured={firebasePushConfigured}
+                pushError={pushError}
+                onRequestPermission={requestNotificationPermission}
+                onMarkRead={markNotificationRead}
+                onMarkAllRead={markAllNotificationsRead}
+                onAddTask={() => { setView("tasks"); setShowModal(true); }}
+              />
+            </div>
             <button onClick={() => view === "habits" ? setShowHabitModal(true) : setShowModal(true)}
-              className="flex items-center gap-1.5 px-4 py-2 rounded-2xl text-sm font-semibold transition-all active:scale-95"
+              className="order-1 flex items-center gap-1.5 px-4 py-2 rounded-2xl text-sm font-semibold transition-all active:scale-95 sm:order-1"
               style={{ background: "linear-gradient(135deg, #007AFF 0%, #5B5BFF 100%)", color: "#fff", boxShadow: "0 4px 16px rgba(0,122,255,0.35)" }}>
               <span className="text-base leading-none font-light">+</span>
               <span className="hidden sm:inline">{view === "habits" ? "New Habit" : "New Task"}</span>
             </button>
-            <NotificationCenter
-              notifications={notifications}
-              permission={notificationPermission}
-              onRequestPermission={requestNotificationPermission}
-              onMarkRead={markNotificationRead}
-              onMarkAllRead={markAllNotificationsRead}
-              onAddTask={() => { setView("tasks"); setShowModal(true); }}
-            />
           </div>
         </div>
         {/* Mobile view toggle */}
