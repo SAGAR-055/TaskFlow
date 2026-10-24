@@ -197,7 +197,7 @@ async function sendHabitNotifications(
   }
 }
 
-export const sendScheduledPushNotifications = onSchedule("every 1 minutes", async () => {
+export const sendScheduledPushNotifications = onSchedule({ schedule: "every 1 minutes", region: "asia-south1" }, async () => {
   const now = new Date();
   const nowTimestamp = Timestamp.fromDate(now);
   const users = await db.collection("users").where("pushEnabled", "==", true).get();
