@@ -28,12 +28,14 @@ const firebaseConfig = {
 const vapidKey = import.meta.env.VITE_FIREBASE_VAPID_KEY;
 
 export const firebasePushConfigured = Object.values(firebaseConfig).every(Boolean) && Boolean(vapidKey);
+export const firebaseAuthConfigured = Object.values(firebaseConfig).every(Boolean);
 let appPromise: Promise<FirebaseApp> | null = null;
 const reminderSyncs = new Map<string, Promise<void>>();
+const accountSyncs = new Map<string, Promise<void>>();
 
 function firebaseApp() {
-  if (!firebasePushConfigured) {
-    throw new Error("Background push is not configured. Add the Firebase web configuration and VAPID key, then rebuild the app.");
+  if (!firebaseAuthConfigured) {
+    throw new Error("Firebase is not configured. Add the Firebase web configuration, then rebuild the app.");
   }
   appPromise ??= import("firebase/app").then(({ getApp, getApps, initializeApp }) =>
     getApps().length ? getApp() : initializeApp(firebaseConfig));
@@ -41,7 +43,7 @@ function firebaseApp() {
 }
 
 export function subscribeToPushUser(onChange: (user: User | null) => void) {
-  if (!firebasePushConfigured) return () => {};
+  if (!firebaseAuthConfigured) return () => {};
   let active = true;
   let unsubscribe = () => {};
   void Promise.all([firebaseApp(), import("firebase/auth")]).then(([app, auth]) => {
@@ -64,6 +66,126 @@ export async function signInForPush() {
   if (auth.currentUser) return auth.currentUser;
   const credential = await signInAnonymously(auth);
   return credential.user;
+}
+
+export async function signInWithGoogle() {
+  const [{ getAuth, GoogleAuthProvider, linkWithPopup, signInWithPopup }, app] = await Promise.all([
+    import("firebase/auth"),
+    firebaseApp(),
+  ]);
+  const auth = getAuth(app);
+  const provider = new GoogleAuthProvider();
+  provider.setCustomParameters({ prompt: "select_account" });
+
+  if (auth.currentUser?.isAnonymous) {
+    try {
+      return (await linkWithPopup(auth.currentUser, provider)).user;
+    } catch (error) {
+      if (
+        typeof error !== "object"
+        || error === null
+        || !("code" in error)
+        || error.code !== "auth/credential-already-in-use"
+      ) {
+        throw error;
+      }
+    }
+  }
+
+  if (auth.currentUser) return auth.currentUser;
+  return (await signInWithPopup(auth, provider)).user;
+}
+
+export async function signOutFromFirebase() {
+  const [{ getAuth }, app] = await Promise.all([import("firebase/auth"), firebaseApp()]);
+  await getAuth(app).signOut();
+}
+
+export async function syncAccountData<Task extends { id: string }, Habit extends { id: string }>(
+  user: User,
+  tasks: Task[],
+  habits: Habit[],
+  isTask: (value: unknown) => value is Task,
+  isHabit: (value: unknown) => value is Habit,
+) {
+  const [firestore, app] = await Promise.all([import("firebase/firestore"), firebaseApp()]);
+  const db = firestore.getFirestore(app);
+
+  async function mergeCollection<T extends { id: string }>(
+    collectionName: "tasks" | "habits",
+    local: T[],
+    isValid: (value: unknown) => value is T,
+  ) {
+    const collectionRef = firestore.collection(db, "users", user.uid, collectionName);
+    const current = await firestore.getDocs(collectionRef);
+    const merged = new Map<string, T>();
+    for (const value of local) merged.set(value.id, value);
+    for (const snapshot of current.docs) {
+      const value = { ...snapshot.data(), id: snapshot.id };
+      if (!isValid(value)) {
+        console.error(`TaskFlow ignored invalid account ${collectionName} data.`, snapshot.id);
+        continue;
+      }
+      if (!merged.has(value.id)) merged.set(value.id, value);
+    }
+    const documents = [...merged.values()];
+    await replaceCollection(user.uid, collectionName, documents.map(value => ({ id: value.id, data: value })));
+    return documents;
+  }
+
+  const [mergedTasks, mergedHabits] = await Promise.all([
+    mergeCollection("tasks", tasks, isTask),
+    mergeCollection("habits", habits, isHabit),
+  ]);
+  return { tasks: mergedTasks, habits: mergedHabits };
+}
+
+export async function saveAccountData<Task extends { id: string }, Habit extends { id: string }>(
+  user: User,
+  tasks: Task[],
+  habits: Habit[],
+) {
+  const previous = accountSyncs.get(user.uid) ?? Promise.resolve();
+  const write = () => Promise.all([
+    replaceCollection(user.uid, "tasks", tasks.map(value => ({ id: value.id, data: value }))),
+    replaceCollection(user.uid, "habits", habits.map(value => ({ id: value.id, data: value }))),
+  ]).then(() => {});
+  const next = previous.then(write, write);
+  accountSyncs.set(user.uid, next);
+  void next.then(
+    () => { if (accountSyncs.get(user.uid) === next) accountSyncs.delete(user.uid); },
+    () => { if (accountSyncs.get(user.uid) === next) accountSyncs.delete(user.uid); },
+  );
+  await next;
+}
+
+export function subscribeToAccountData<T extends { id: string }>(
+  user: User,
+  collectionName: "tasks" | "habits",
+  isValid: (value: unknown) => value is T,
+  onChange: (values: T[]) => void,
+  onError: (error: Error) => void,
+) {
+  let active = true;
+  let unsubscribe = () => {};
+  void Promise.all([firebaseApp(), import("firebase/firestore")]).then(([app, firestore]) => {
+    if (!active) return;
+    const collectionRef = firestore.collection(firestore.getFirestore(app), "users", user.uid, collectionName);
+    unsubscribe = firestore.onSnapshot(collectionRef, snapshot => {
+      onChange(snapshot.docs.flatMap(document => {
+        const value = { ...document.data(), id: document.id };
+          if (isValid(value)) return [value];
+          console.error(`TaskFlow ignored invalid synced ${collectionName} data.`, document.id);
+          return [];
+      }));
+    }, error => onError(error));
+  }).catch(error => {
+    if (active) onError(error instanceof Error ? error : new Error("Could not subscribe to account data."));
+  });
+  return () => {
+    active = false;
+    unsubscribe();
+  };
 }
 
 async function serviceWorkerRegistration() {

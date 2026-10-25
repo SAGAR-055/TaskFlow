@@ -5,7 +5,7 @@ TaskFlow can send deadline, overdue, habit, and daily-planning reminders while t
 ## Firebase project setup
 
 1. Create a Firebase project and register a Web app.
-2. Enable **Anonymous** under Authentication > Sign-in method.
+2. Under Authentication > Sign-in method, enable **Google** for account sign-in and cross-device sync. Enable **Anonymous** to keep background push available to users who have not signed in. Under Authentication > Settings > Authorized domains, add every hostname used to open the app, including your local development hostname and deployed or preview hostname. Enter only the hostname (for example, `my-app.web.app`), without `https://` or a port. If sign-in reports `auth/unauthorized-domain`, add the hostname shown in the app's error message and try again.
 3. Create the Cloud Firestore database.
 4. In Project settings > Cloud Messaging, generate a Web Push certificate key pair (VAPID key).
 5. Set up a Firebase billing plan that supports scheduled functions. Scheduled reminders run once per minute and use Cloud Scheduler, which requires the Blaze plan.
@@ -24,7 +24,8 @@ TaskFlow can send deadline, overdue, habit, and daily-planning reminders while t
 
 ## Behavior and platform notes
 
-- Existing browser-local tasks and habits are synced to Firestore for the signed-in anonymous device so the scheduled function can check reminders after the page closes. The app continues to use local storage as its user interface source of truth.
-- Each installation gets a Firebase anonymous account. Clearing browser data can remove that account and its push subscription.
+- Google sign-in syncs tasks and habits through Firestore in real time. On the first sign-in on a device, existing local tasks and habits are merged into the Google account; matching IDs from that device take precedence.
+- Users who have not signed in can still use local tasks and habits. Background push uses Firebase Authentication and stores reminder schedules in Firestore for the current account.
+- Clearing browser data can remove the local cache and anonymous push account. Google-synced tasks and habits remain in Firestore and can be restored by signing in again.
 - On iPhone and iPad, install TaskFlow to the Home Screen and use a supported iOS/iPadOS version (16.4 or later) before enabling web push.
 - If a Firebase deployment is not configured, in-app reminders continue to work while TaskFlow is open.

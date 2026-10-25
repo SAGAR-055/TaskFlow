@@ -1,10 +1,16 @@
 import { useState, useMemo, useRef, useEffect } from "react";
 import type { User } from "firebase/auth";
 import {
+  firebaseAuthConfigured,
   firebasePushConfigured,
+  saveAccountData,
+  signInWithGoogle,
   signInForPush,
+  signOutFromFirebase,
   subscribeDeviceForPush,
+  subscribeToAccountData,
   subscribeToPushUser,
+  syncAccountData,
   syncReminderData,
 } from "./firebase-push";
 
@@ -68,6 +74,9 @@ function daysFromNow(n: number) {
 const TASKS_STORAGE_KEY = "taskflow.tasks";
 const HABITS_STORAGE_KEY = "taskflow.habits";
 const NOTIFICATIONS_STORAGE_KEY = "taskflow.notifications";
+const migratedAccountStorageKey = (uid: string) => `taskflow.migrated.${uid}`;
+const accountTasksStorageKey = (uid: string) => `${TASKS_STORAGE_KEY}.${uid}`;
+const accountHabitsStorageKey = (uid: string) => `${HABITS_STORAGE_KEY}.${uid}`;
 const HABIT_EMOJIS = ["🌱", "📚", "💧", "🏃", "🧘", "🍎", "💤", "📝", "💻", "🎨", "🎸", "☀️", "🙏", "🚶", "🧹", "🧠"];
 
 interface InstallPromptEvent extends Event {
@@ -103,9 +112,9 @@ function isTask(value: unknown): value is Task {
     && typeof task.createdAt === "string";
 }
 
-function loadTasks(): Task[] {
+function loadTasks(storageKey = TASKS_STORAGE_KEY): Task[] {
   try {
-    const stored = localStorage.getItem(TASKS_STORAGE_KEY);
+    const stored = localStorage.getItem(storageKey);
     if (!stored) return [];
 
     const parsed: unknown = JSON.parse(stored);
@@ -134,9 +143,9 @@ function isHabit(value: unknown): value is Habit {
     && typeof habit.createdAt === "string";
 }
 
-function loadHabits(): Habit[] {
+function loadHabits(storageKey = HABITS_STORAGE_KEY): Habit[] {
   try {
-    const stored = localStorage.getItem(HABITS_STORAGE_KEY);
+    const stored = localStorage.getItem(storageKey);
     if (!stored) return [];
     const parsed: unknown = JSON.parse(stored);
     if (!Array.isArray(parsed) || !parsed.every(isHabit)) {
@@ -148,6 +157,24 @@ function loadHabits(): Habit[] {
     console.error("TaskFlow could not restore habits from local storage.", error);
     return [];
   }
+}
+
+function mergeSyncedItems<T extends { id: string }>(current: T[], incoming: T[]) {
+  const incomingById = new Map(incoming.map(item => [item.id, item]));
+  const merged = current
+    .filter(item => incomingById.has(item.id))
+    .map(item => incomingById.get(item.id))
+    .filter((item): item is T => item !== undefined);
+  const currentIds = new Set(current.map(item => item.id));
+  for (const item of incoming) {
+    if (!currentIds.has(item.id)) merged.push(item);
+  }
+  return merged.length === current.length
+    && merged.every((item, index) =>
+      JSON.stringify(Object.entries(item).sort(([left], [right]) => left.localeCompare(right)))
+      === JSON.stringify(Object.entries(current[index]).sort(([left], [right]) => left.localeCompare(right))))
+    ? current
+    : merged;
 }
 
 function isAppNotification(value: unknown): value is AppNotification {
@@ -991,6 +1018,16 @@ export default function App() {
   const [notifications, setNotifications] = useState<AppNotification[]>(loadNotifications);
   const sentNotificationIds = useRef(new Set(notifications.map(notification => notification.id)));
   const [firebaseUser, setFirebaseUser] = useState<User | null>(null);
+  const [accountDataReady, setAccountDataReady] = useState<string | null>(null);
+  const [accountDataError, setAccountDataError] = useState<string | null>(null);
+  const [authActionError, setAuthActionError] = useState<string | null>(null);
+  const [authActionPending, setAuthActionPending] = useState(false);
+  const activeGoogleUid = useRef<string | null>(null);
+  const authLoadGeneration = useRef(0);
+  const tasksRef = useRef(tasks);
+  const habitsRef = useRef(habits);
+  tasksRef.current = tasks;
+  habitsRef.current = habits;
   const [pushEnabled, setPushEnabled] = useState(false);
   const [pushError, setPushError] = useState<string | null>(null);
   const [notificationPermission, setNotificationPermission] = useState<NotificationPermission | "unsupported">(
@@ -1007,15 +1044,85 @@ export default function App() {
   const [showHabitModal, setShowHabitModal] = useState(false);
   const [editingHabit, setEditingHabit] = useState<Habit | null>(null);
 
-  useEffect(() => subscribeToPushUser(setFirebaseUser), []);
+  useEffect(() => subscribeToPushUser(user => {
+    setFirebaseUser(user);
+    const isGoogleUser = Boolean(user?.providerData.some(provider => provider.providerId === "google.com"));
+    const previousUid = activeGoogleUid.current;
+
+    if (!user || !isGoogleUser) {
+      activeGoogleUid.current = null;
+      authLoadGeneration.current += 1;
+      setAccountDataReady(null);
+      setAccountDataError(null);
+      if (previousUid) {
+        setTasks(loadTasks());
+        setHabits(loadHabits());
+      }
+      return;
+    }
+
+    if (previousUid === user.uid) return;
+    activeGoogleUid.current = user.uid;
+    const generation = ++authLoadGeneration.current;
+    setAccountDataReady(null);
+    setAccountDataError(null);
+
+    let shouldMigrateLocalData = true;
+    try {
+      shouldMigrateLocalData = localStorage.getItem(migratedAccountStorageKey(user.uid)) !== "1";
+    } catch (error) {
+      console.error("TaskFlow could not check account data migration status.", error);
+    }
+    const migrateFromThisDevice = shouldMigrateLocalData && previousUid === null;
+    const localTasks = migrateFromThisDevice ? tasksRef.current : loadTasks(accountTasksStorageKey(user.uid));
+    const localHabits = migrateFromThisDevice ? habitsRef.current : loadHabits(accountHabitsStorageKey(user.uid));
+
+    void syncAccountData(user, localTasks, localHabits, isTask, isHabit).then(data => {
+      if (generation !== authLoadGeneration.current) return;
+      setTasks(data.tasks);
+      setHabits(data.habits);
+      setAccountDataReady(user.uid);
+      try {
+        localStorage.setItem(migratedAccountStorageKey(user.uid), "1");
+      } catch (error) {
+        console.error("TaskFlow could not save account data migration status.", error);
+        setAccountDataError("Your data is synced, but this device could not save its sync status.");
+      }
+    }).catch(error => {
+      if (generation !== authLoadGeneration.current) return;
+      console.error("TaskFlow could not sync tasks and habits to your Google account.", error);
+      setAccountDataError(error instanceof Error ? error.message : "Could not sync your account data.");
+    });
+  }), []);
+
+  useEffect(() => {
+    if (!firebaseUser || firebaseUser.isAnonymous || accountDataReady !== firebaseUser.uid) return;
+    const unsubscribeTasks = subscribeToAccountData(firebaseUser, "tasks", isTask, incoming => {
+      setTasks(current => mergeSyncedItems(current, incoming));
+    }, error => {
+      console.error("TaskFlow could not receive synced tasks.", error);
+      setAccountDataError(error.message);
+    });
+    const unsubscribeHabits = subscribeToAccountData(firebaseUser, "habits", isHabit, incoming => {
+      setHabits(current => mergeSyncedItems(current, incoming));
+    }, error => {
+      console.error("TaskFlow could not receive synced habits.", error);
+      setAccountDataError(error.message);
+    });
+    return () => {
+      unsubscribeTasks();
+      unsubscribeHabits();
+    };
+  }, [firebaseUser, accountDataReady]);
 
   useEffect(() => {
     if (!firebaseUser) return;
+    if (!firebaseUser.isAnonymous && accountDataReady !== firebaseUser.uid) return;
     void syncReminderData(firebaseUser, tasks, habits).catch(error => {
       console.error("TaskFlow could not sync reminder schedules to Firebase.", error);
       setPushError(error instanceof Error ? error.message : "Could not sync reminder schedules to Firebase.");
     });
-  }, [firebaseUser, tasks, habits]);
+  }, [firebaseUser, accountDataReady, tasks, habits]);
 
   useEffect(() => {
     if (!firebaseUser || notificationPermission !== "granted") return;
@@ -1094,21 +1201,74 @@ export default function App() {
     }
   }
 
+  async function handleGoogleSignIn() {
+    if (!firebaseAuthConfigured) {
+      setAuthActionError("Google sign-in is unavailable because Firebase is not configured.");
+      return;
+    }
+    setAuthActionPending(true);
+    setAuthActionError(null);
+    try {
+      await signInWithGoogle();
+    } catch (error) {
+      console.error("TaskFlow could not sign in with Google.", error);
+      const errorCode = typeof error === "object" && error !== null && "code" in error
+        ? error.code
+        : undefined;
+      setAuthActionError(errorCode === "auth/unauthorized-domain"
+        ? `Firebase is blocking sign-in from "${window.location.hostname}". Add this hostname in Firebase Console > Authentication > Settings > Authorized domains, then try again.`
+        : error instanceof Error ? error.message : "Could not sign in with Google.");
+    } finally {
+      setAuthActionPending(false);
+    }
+  }
+
+  async function handleSignOut() {
+    setAuthActionPending(true);
+    setAuthActionError(null);
+    try {
+      await signOutFromFirebase();
+    } catch (error) {
+      console.error("TaskFlow could not sign out.", error);
+      setAuthActionError(error instanceof Error ? error.message : "Could not sign out.");
+    } finally {
+      setAuthActionPending(false);
+    }
+  }
+
   useEffect(() => {
     try {
+      if (firebaseUser && !firebaseUser.isAnonymous) {
+        if (accountDataReady !== firebaseUser.uid) return;
+        localStorage.setItem(accountTasksStorageKey(firebaseUser.uid), JSON.stringify(tasks));
+        return;
+      }
       localStorage.setItem(TASKS_STORAGE_KEY, JSON.stringify(tasks));
     } catch (error) {
       console.error("TaskFlow could not save tasks to local storage.", error);
     }
-  }, [tasks]);
+  }, [tasks, firebaseUser, accountDataReady]);
 
   useEffect(() => {
     try {
+      if (firebaseUser && !firebaseUser.isAnonymous) {
+        if (accountDataReady !== firebaseUser.uid) return;
+        localStorage.setItem(accountHabitsStorageKey(firebaseUser.uid), JSON.stringify(habits));
+        return;
+      }
       localStorage.setItem(HABITS_STORAGE_KEY, JSON.stringify(habits));
     } catch (error) {
       console.error("TaskFlow could not save habits to local storage.", error);
     }
-  }, [habits]);
+  }, [habits, firebaseUser, accountDataReady]);
+
+  useEffect(() => {
+    if (!firebaseUser || firebaseUser.isAnonymous || accountDataReady !== firebaseUser.uid) return;
+    void saveAccountData(firebaseUser, tasks, habits).catch(error => {
+      console.error("TaskFlow could not save account tasks and habits.", error);
+      setAccountDataError(error instanceof Error ? error.message : "Could not save account data.");
+    });
+  }, [firebaseUser, accountDataReady, tasks, habits]);
 
   useEffect(() => {
     try {
@@ -1251,6 +1411,7 @@ export default function App() {
   ];
 
   const donePct = filtered.length ? Math.round((filtered.filter(t => t.completed).length / filtered.length) * 100) : 0;
+  const isGoogleAccount = Boolean(firebaseUser?.providerData.some(provider => provider.providerId === "google.com"));
 
   return (
     <div className="min-h-full bg-iridescent">
@@ -1279,6 +1440,27 @@ export default function App() {
                 className="glass-btn rounded-2xl px-3 py-2 text-sm font-semibold whitespace-nowrap"
                 style={{ color: "#007AFF" }}>
                 Install
+              </button>
+            )}
+            {isGoogleAccount ? (
+              <div className="flex min-w-0 items-center gap-2">
+                <span className="hidden max-w-32 truncate text-xs font-medium sm:inline" style={{ color: "#636366" }}
+                  title={firebaseUser?.email || firebaseUser?.displayName || undefined}>
+                  {firebaseUser?.displayName || firebaseUser?.email || "Google account"}
+                  <span className="ml-1 text-[10px]">{accountDataReady === firebaseUser?.uid ? "· Synced" : "· Syncing…"}</span>
+                </span>
+                <button onClick={handleSignOut} disabled={authActionPending}
+                  className="glass-btn rounded-2xl px-3 py-2 text-xs font-semibold whitespace-nowrap disabled:opacity-50"
+                  style={{ color: "#007AFF" }}>
+                  Sign out
+                </button>
+              </div>
+            ) : (
+              <button onClick={handleGoogleSignIn} disabled={authActionPending || !firebaseAuthConfigured}
+                className="glass-btn rounded-2xl px-3 py-2 text-xs font-semibold whitespace-nowrap disabled:opacity-50"
+                style={{ color: "#007AFF" }}
+                title={firebaseAuthConfigured ? "Sign in with Google to sync your tasks and habits" : "Configure Firebase to enable Google sign-in"}>
+                {authActionPending ? "Signing in…" : "Sign in"}
               </button>
             )}
             {/* View toggle */}
@@ -1348,6 +1530,12 @@ export default function App() {
           </button>
         </div>
       </header>
+
+      {(authActionError || accountDataError) && (
+        <p role="alert" className="mx-auto mt-3 max-w-5xl px-4 text-sm font-medium" style={{ color: "#B42318" }}>
+          {authActionError || accountDataError}
+        </p>
+      )}
 
       <main className="max-w-5xl mx-auto px-4 sm:px-6 py-6 space-y-5">
         {view === "habits" ? <HabitStats habits={habits} /> : view === "tasks" ? <StatsBar tasks={filtered} /> : null}
