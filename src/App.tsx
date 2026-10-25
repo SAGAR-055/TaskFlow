@@ -1022,6 +1022,7 @@ export default function App() {
   const [accountDataError, setAccountDataError] = useState<string | null>(null);
   const [authActionError, setAuthActionError] = useState<string | null>(null);
   const [authActionPending, setAuthActionPending] = useState(false);
+  const [signInPrompt, setSignInPrompt] = useState<"task" | "habit" | null>(null);
   const activeGoogleUid = useRef<string | null>(null);
   const authLoadGeneration = useRef(0);
   const tasksRef = useRef(tasks);
@@ -1094,6 +1095,14 @@ export default function App() {
       setAccountDataError(error instanceof Error ? error.message : "Could not sync your account data.");
     });
   }), []);
+
+  useEffect(() => {
+    if (!signInPrompt || !firebaseUser || accountDataReady !== firebaseUser.uid) return;
+    const pendingCreation = signInPrompt;
+    setSignInPrompt(null);
+    if (pendingCreation === "task") setShowModal(true);
+    else setShowHabitModal(true);
+  }, [signInPrompt, firebaseUser, accountDataReady]);
 
   useEffect(() => {
     if (!firebaseUser || firebaseUser.isAnonymous || accountDataReady !== firebaseUser.uid) return;
@@ -1234,6 +1243,26 @@ export default function App() {
     } finally {
       setAuthActionPending(false);
     }
+  }
+
+  function requestTaskCreation() {
+    if (firebaseUser?.providerData.some(provider => provider.providerId === "google.com")) {
+      if (accountDataReady === firebaseUser.uid) setShowModal(true);
+      else setSignInPrompt("task");
+      return;
+    }
+    setAuthActionError(null);
+    setSignInPrompt("task");
+  }
+
+  function requestHabitCreation() {
+    if (firebaseUser?.providerData.some(provider => provider.providerId === "google.com")) {
+      if (accountDataReady === firebaseUser.uid) setShowHabitModal(true);
+      else setSignInPrompt("habit");
+      return;
+    }
+    setAuthActionError(null);
+    setSignInPrompt("habit");
   }
 
   useEffect(() => {
@@ -1419,6 +1448,35 @@ export default function App() {
       {showHabitModal && <HabitModal onClose={() => setShowHabitModal(false)} onSave={addHabit} />}
       {editingHabit && <HabitModal key={editingHabit.id} habit={editingHabit} onClose={() => setEditingHabit(null)} onSave={saveHabit} />}
       {editingTask && <EditTaskModal task={editingTask} onClose={() => setEditingTask(null)} onSave={saveTask} />}
+      {signInPrompt && (
+        <div className="modal-backdrop fixed inset-0 z-[100] flex items-center justify-center p-4"
+          onMouseDown={event => { if (event.target === event.currentTarget) setSignInPrompt(null); }}>
+          <section role="dialog" aria-modal="true" aria-labelledby="sign-in-prompt-title"
+            className="glass-card relative w-full max-w-sm rounded-3xl p-6 text-center">
+            <button onClick={() => setSignInPrompt(null)} aria-label="Close sign-in prompt"
+              className="absolute right-5 top-5 rounded-full px-2 py-1 text-lg" style={{ color: "#8E8E93" }}>×</button>
+            <span className="text-4xl" aria-hidden="true">{signInPrompt === "task" ? "📋" : "🌱"}</span>
+            <h2 id="sign-in-prompt-title" className="mt-3 text-lg font-bold" style={{ color: "#1c1c1e" }}>
+              Sign in to create a {signInPrompt}
+            </h2>
+            <p className="mt-2 text-sm leading-relaxed" style={{ color: "#636366" }}>
+              Sign in with Google to create and sync your tasks and habits across devices.
+            </p>
+            {authActionError && <p role="alert" className="mt-3 text-xs leading-relaxed" style={{ color: "#B42318" }}>{authActionError}</p>}
+            {accountDataError && <p role="alert" className="mt-3 text-xs leading-relaxed" style={{ color: "#B42318" }}>{accountDataError}</p>}
+            {firebaseUser?.providerData.some(provider => provider.providerId === "google.com") ? (
+              <p className="mt-4 text-sm font-medium" style={{ color: "#007AFF" }}>Preparing your account…</p>
+            ) : (
+              <button onClick={handleGoogleSignIn} disabled={authActionPending || !firebaseAuthConfigured}
+                className="mt-5 w-full rounded-2xl px-4 py-3 text-sm font-semibold text-white disabled:opacity-50"
+                style={{ background: "linear-gradient(135deg, #007AFF 0%, #5B5BFF 100%)" }}>
+                {authActionPending ? "Signing in…" : "Continue with Google"}
+              </button>
+            )}
+            {!firebaseAuthConfigured && <p className="mt-3 text-xs" style={{ color: "#8E8E93" }}>Firebase needs to be configured before you can sign in.</p>}
+          </section>
+        </div>
+      )}
 
       {/* Header */}
       <header className="sticky top-0 z-40 glass border-b border-white/60">
@@ -1500,10 +1558,10 @@ export default function App() {
                 onRequestPermission={requestNotificationPermission}
                 onMarkRead={markNotificationRead}
                 onMarkAllRead={markAllNotificationsRead}
-                onAddTask={() => { setView("tasks"); setShowModal(true); }}
+                onAddTask={() => { setView("tasks"); requestTaskCreation(); }}
               />
             </div>
-            <button onClick={() => view === "habits" ? setShowHabitModal(true) : setShowModal(true)}
+            <button onClick={() => view === "habits" ? requestHabitCreation() : requestTaskCreation()}
               className="order-1 flex items-center gap-1.5 px-4 py-2 rounded-2xl text-sm font-semibold transition-all active:scale-95 sm:order-1"
               style={{ background: "linear-gradient(135deg, #007AFF 0%, #5B5BFF 100%)", color: "#fff", boxShadow: "0 4px 16px rgba(0,122,255,0.35)" }}>
               <span className="text-base leading-none font-light">+</span>
@@ -1547,13 +1605,13 @@ export default function App() {
                 <h2 className="font-semibold" style={{ color: "#1c1c1e" }}>Your habits</h2>
                 <p className="text-xs mt-1" style={{ color: "#8E8E93" }}>Build better routines, one day at a time.</p>
               </div>
-              <button onClick={() => setShowHabitModal(true)} className="glass-btn px-4 py-2 rounded-2xl text-xs font-semibold whitespace-nowrap" style={{ color: "#34C759" }}>+ Add a habit</button>
+              <button onClick={requestHabitCreation} className="glass-btn px-4 py-2 rounded-2xl text-xs font-semibold whitespace-nowrap" style={{ color: "#34C759" }}>+ Add a habit</button>
             </div>
             {habits.length === 0 ? (
               <div className="glass-card rounded-3xl py-16 flex flex-col items-center gap-3">
                 <span className="text-4xl">🌱</span>
                 <p className="text-sm font-medium" style={{ color: "#8E8E93" }}>No habits yet</p>
-                <button onClick={() => setShowHabitModal(true)} className="glass-btn px-4 py-2 rounded-2xl text-xs font-semibold" style={{ color: "#34C759" }}>Create your first habit</button>
+                <button onClick={requestHabitCreation} className="glass-btn px-4 py-2 rounded-2xl text-xs font-semibold" style={{ color: "#34C759" }}>Create your first habit</button>
               </div>
             ) : (
               <div className="space-y-2.5">
@@ -1623,7 +1681,7 @@ export default function App() {
               <div className="glass-card rounded-3xl py-16 flex flex-col items-center gap-3">
                 <span className="text-4xl">🌸</span>
                 <p className="text-sm font-medium" style={{ color: "#8E8E93" }}>No tasks found</p>
-                <button onClick={() => setShowModal(true)} className="glass-btn px-4 py-2 rounded-2xl text-xs font-semibold" style={{ color: "#007AFF" }}>
+                <button onClick={requestTaskCreation} className="glass-btn px-4 py-2 rounded-2xl text-xs font-semibold" style={{ color: "#007AFF" }}>
                   + Add a task
                 </button>
               </div>
